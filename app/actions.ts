@@ -1,328 +1,538 @@
-'use server';
+"use server";
 
-import { query } from '@/lib/db';
-import { revalidatePath } from 'next/cache';
-import { signIn, signOut, auth } from '@/auth';
-import { AuthError } from 'next-auth';
-import bcrypt from 'bcryptjs';
+import { query } from "@/lib/db";
+import { revalidatePath } from "next/cache";
+import { signIn, signOut, auth } from "@/auth";
+import { AuthError } from "next-auth";
+import bcrypt from "bcryptjs";
+import { calibrateDealScore } from "@/lib/ml/calibration";
+import { buildFeatures } from "@/lib/ml/features";
+import { getCurrentStageDurations, getStageMetrics } from "@/lib/ml/historyFeatures";
+import { loadModel, predictScore, saveModel } from "@/lib/ml/model";
+import { trainModel } from "@/lib/ml/trainModel";
+import { predictDeal } from "@/lib/ml/predict";
 
 export async function authenticate(
-    prevState: string | undefined,
-    formData: FormData,
+  prevState: string | undefined,
+  formData: FormData,
 ) {
-    try {
-        await signIn('credentials', formData);
-    } catch (error) {
-        if (error instanceof AuthError) {
-            switch (error.type) {
-                case 'CredentialsSignin':
-                    return 'Invalid credentials.';
-                default:
-                    return 'Something went wrong.';
-            }
-        }
-        throw error;
+  try {
+    await signIn("credentials", formData);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      switch (error.type) {
+        case "CredentialsSignin":
+          return "Invalid credentials.";
+        default:
+          return "Something went wrong.";
+      }
     }
+    throw error;
+  }
 }
 
 export async function logout() {
-    await signOut();
+  await signOut();
 }
 
-export async function signUp(prevState: string | undefined, formData: FormData) {
-    const name = formData.get('name') as string;
-    const email = formData.get('email') as string;
-    const password = formData.get('password') as string;
-    const orgName = formData.get('orgName') as string || `${name}'s Org`;
+export async function signUp(
+  prevState: string | undefined,
+  formData: FormData,
+) {
+  const name = formData.get("name") as string;
+  const email = formData.get("email") as string;
+  const password = formData.get("password") as string;
+  const orgName = (formData.get("orgName") as string) || `${name}'s Org`;
 
-    if (!email || !password || !name) {
-        return 'Please fill in all fields.';
+  if (!email || !password || !name) {
+    return "Please fill in all fields.";
+  }
+
+  // Check if user exists
+  const existingUser = await query("SELECT * FROM users WHERE email = $1", [
+    email,
+  ]);
+  if (existingUser.rows.length > 0) {
+    return "User already exists.";
+  }
+
+  // Create Organization
+  let orgId;
+  try {
+    const orgResult = await query(
+      "INSERT INTO organizations (name) VALUES ($1) RETURNING id",
+      [orgName],
+    );
+    orgId = orgResult.rows[0].id;
+  } catch (error) {
+    return "Failed to create organization.";
+  }
+
+  // Hash password
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  // Create user linked to Org
+  try {
+    await query(
+      "INSERT INTO users (name, email, password, organization_id) VALUES ($1, $2, $3, $4)",
+      [name, email, hashedPassword, orgId],
+    );
+  } catch (error) {
+    return "Failed to create user.";
+  }
+
+  // Auto login after signup
+  try {
+    await signIn("credentials", formData);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return "Something went wrong during sign in.";
     }
-
-    // Check if user exists
-    const existingUser = await query('SELECT * FROM users WHERE email = $1', [email]);
-    if (existingUser.rows.length > 0) {
-        return 'User already exists.';
-    }
-
-    // Create Organization
-    let orgId;
-    try {
-        const orgResult = await query(
-            'INSERT INTO organizations (name) VALUES ($1) RETURNING id',
-            [orgName]
-        );
-        orgId = orgResult.rows[0].id;
-    } catch (error) {
-        return 'Failed to create organization.';
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create user linked to Org
-    try {
-        await query(
-            'INSERT INTO users (name, email, password, organization_id) VALUES ($1, $2, $3, $4)',
-            [name, email, hashedPassword, orgId]
-        );
-    } catch (error) {
-        return 'Failed to create user.';
-    }
-
-    // Auto login after signup
-    try {
-        await signIn('credentials', formData);
-    } catch (error) {
-        if (error instanceof AuthError) {
-            return 'Something went wrong during sign in.';
-        }
-        throw error;
-    }
+    throw error;
+  }
 }
 
 export async function updateProfile(prevState: any, formData: FormData) {
-    const session = await auth();
-    if (!session?.user?.email) return { message: 'Not authenticated', success: false };
+  const session = await auth();
+  if (!session?.user?.email)
+    return { message: "Not authenticated", success: false };
 
-    const name = formData.get('name') as string;
-    const newPassword = formData.get('newPassword') as string;
-    const currentPassword = formData.get('currentPassword') as string;
+  const name = formData.get("name") as string;
+  const newPassword = formData.get("newPassword") as string;
+  const currentPassword = formData.get("currentPassword") as string;
 
-    try {
-        // If changing password
-        if (newPassword) {
-            if (!currentPassword) return { message: 'Current password required to change password', success: false };
+  try {
+    // If changing password
+    if (newPassword) {
+      if (!currentPassword)
+        return {
+          message: "Current password required to change password",
+          success: false,
+        };
 
-            // Fetch user to get current hash
-            const userRes = await query('SELECT * FROM users WHERE email = $1', [session.user.email]);
-            const user = userRes.rows[0];
+      // Fetch user to get current hash
+      const userRes = await query("SELECT * FROM users WHERE email = $1", [
+        session.user.email,
+      ]);
+      const user = userRes.rows[0];
 
-            const match = await bcrypt.compare(currentPassword, user.password);
-            if (!match) return { message: 'Incorrect current password', success: false };
+      const match = await bcrypt.compare(currentPassword, user.password);
+      if (!match)
+        return { message: "Incorrect current password", success: false };
 
-            const hashedNew = await bcrypt.hash(newPassword, 10);
-            await query('UPDATE users SET password = $1 WHERE email = $2', [hashedNew, session.user.email]);
-        }
-
-        // Update name
-        if (name && name !== session.user.name) {
-            await query('UPDATE users SET name = $1 WHERE email = $2', [name, session.user.email]);
-        }
-
-        revalidatePath('/settings');
-        revalidatePath('/'); // Update sidebar name
-        return { message: 'Profile updated successfully', success: true };
-    } catch (error) {
-        return { message: 'Failed to update profile', success: false };
+      const hashedNew = await bcrypt.hash(newPassword, 10);
+      await query("UPDATE users SET password = $1 WHERE email = $2", [
+        hashedNew,
+        session.user.email,
+      ]);
     }
+
+    // Update name
+    if (name && name !== session.user.name) {
+      await query("UPDATE users SET name = $1 WHERE email = $2", [
+        name,
+        session.user.email,
+      ]);
+    }
+
+    revalidatePath("/settings");
+    revalidatePath("/"); // Update sidebar name
+    return { message: "Profile updated successfully", success: true };
+  } catch (error) {
+    return { message: "Failed to update profile", success: false };
+  }
 }
 
 // --- Companies Actions ---
 
 export async function getCompanies() {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) return [];
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) return [];
 
-    const result = await query('SELECT * FROM companies WHERE organization_id = $1 ORDER BY created_at DESC', [orgId]);
-    return result.rows;
+  const result = await query(
+    "SELECT * FROM companies WHERE organization_id = $1 ORDER BY created_at DESC",
+    [orgId],
+  );
+  return result.rows;
 }
 
 export async function createCompany(formData: FormData) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    const name = formData.get('name') as string;
-    const domain = formData.get('domain') as string;
-    const industry = formData.get('industry') as string;
-    const employees = formData.get('employees') as string;
-    const revenue = formData.get('revenue') as string;
-    const city = formData.get('city') as string;
-    const state = formData.get('state') as string;
-    const country = formData.get('country') as string;
-    const description = formData.get('description') as string;
-    const lifecycle_stage = formData.get('lifecycle_stage') as string;
+  const name = formData.get("name") as string;
+  const domain = formData.get("domain") as string;
+  const industry = formData.get("industry") as string;
+  const employees = formData.get("employees") as string;
+  const revenue = formData.get("revenue") as string;
+  const city = formData.get("city") as string;
+  const state = formData.get("state") as string;
+  const country = formData.get("country") as string;
+  const description = formData.get("description") as string;
+  const lifecycle_stage = formData.get("lifecycle_stage") as string;
 
-    await query(
-        `INSERT INTO companies (name, domain, industry, employees, revenue, city, state, country, description, lifecycle_stage, organization_id)
+  await query(
+    `INSERT INTO companies (name, domain, industry, employees, revenue, city, state, country, description, lifecycle_stage, organization_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [name, domain, industry, employees, revenue, city, state, country, description, lifecycle_stage, orgId]
-    );
+    [
+      name,
+      domain,
+      industry,
+      employees,
+      revenue,
+      city,
+      state,
+      country,
+      description,
+      lifecycle_stage,
+      orgId,
+    ],
+  );
 
-    revalidatePath('/companies');
+  revalidatePath("/companies");
 }
 
 export async function updateCompany(id: number, formData: FormData) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    const name = formData.get('name') as string;
-    const domain = formData.get('domain') as string;
-    const industry = formData.get('industry') as string;
-    const employees = formData.get('employees') as string;
-    const revenue = formData.get('revenue') as string;
-    const city = formData.get('city') as string;
-    const state = formData.get('state') as string;
-    const country = formData.get('country') as string;
-    const description = formData.get('description') as string;
-    const lifecycle_stage = formData.get('lifecycle_stage') as string;
+  const name = formData.get("name") as string;
+  const domain = formData.get("domain") as string;
+  const industry = formData.get("industry") as string;
+  const employees = formData.get("employees") as string;
+  const revenue = formData.get("revenue") as string;
+  const city = formData.get("city") as string;
+  const state = formData.get("state") as string;
+  const country = formData.get("country") as string;
+  const description = formData.get("description") as string;
+  const lifecycle_stage = formData.get("lifecycle_stage") as string;
 
-    await query(
-        `UPDATE companies 
+  await query(
+    `UPDATE companies 
      SET name = $1, domain = $2, industry = $3, employees = $4, revenue = $5, city = $6, state = $7, country = $8, description = $9, lifecycle_stage = $10
      WHERE id = $11 AND organization_id = $12`,
-        [name, domain, industry, employees, revenue, city, state, country, description, lifecycle_stage, id, orgId]
-    );
+    [
+      name,
+      domain,
+      industry,
+      employees,
+      revenue,
+      city,
+      state,
+      country,
+      description,
+      lifecycle_stage,
+      id,
+      orgId,
+    ],
+  );
 
-    revalidatePath('/companies');
+  revalidatePath("/companies");
 }
 
 export async function deleteCompany(id: number) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    await query('DELETE FROM companies WHERE id = $1 AND organization_id = $2', [id, orgId]);
-    revalidatePath('/companies');
+  await query("DELETE FROM companies WHERE id = $1 AND organization_id = $2", [
+    id,
+    orgId,
+  ]);
+  revalidatePath("/companies");
 }
 
 // --- Contacts Actions ---
 
 export async function getContacts() {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) return [];
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) return [];
 
-    const result = await query(`
+  const result = await query(
+    `
     SELECT contacts.*, companies.name as company_name 
     FROM contacts 
     LEFT JOIN companies ON contacts.company_id = companies.id 
     WHERE contacts.organization_id = $1
     ORDER BY contacts.created_at DESC
-  `, [orgId]);
-    return result.rows;
+  `,
+    [orgId],
+  );
+  return result.rows;
 }
 
 export async function createContact(formData: FormData) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    const first_name = formData.get('first_name') as string;
-    const last_name = formData.get('last_name') as string;
-    const email = formData.get('email') as string;
-    const phone = formData.get('phone') as string;
-    const job_title = formData.get('job_title') as string;
-    const lifecycle_stage = formData.get('lifecycle_stage') as string;
-    const company_id = formData.get('company_id') ? parseInt(formData.get('company_id') as string) : null;
+  const first_name = formData.get("first_name") as string;
+  const last_name = formData.get("last_name") as string;
+  const email = formData.get("email") as string;
+  const phone = formData.get("phone") as string;
+  const job_title = formData.get("job_title") as string;
+  const lifecycle_stage = formData.get("lifecycle_stage") as string;
+  const company_id = formData.get("company_id")
+    ? parseInt(formData.get("company_id") as string)
+    : null;
 
-    await query(
-        `INSERT INTO contacts (first_name, last_name, email, phone, job_title, lifecycle_stage, company_id, organization_id)
+  await query(
+    `INSERT INTO contacts (first_name, last_name, email, phone, job_title, lifecycle_stage, company_id, organization_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [first_name, last_name, email, phone, job_title, lifecycle_stage, company_id, orgId]
-    );
+    [
+      first_name,
+      last_name,
+      email,
+      phone,
+      job_title,
+      lifecycle_stage,
+      company_id,
+      orgId,
+    ],
+  );
 
-    revalidatePath('/contacts');
+  revalidatePath("/contacts");
 }
 
 export async function updateContact(id: number, formData: FormData) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    const first_name = formData.get('first_name') as string;
-    const last_name = formData.get('last_name') as string;
-    const email = formData.get('email') as string;
-    const phone = formData.get('phone') as string;
-    const job_title = formData.get('job_title') as string;
-    const lifecycle_stage = formData.get('lifecycle_stage') as string;
-    const company_id = formData.get('company_id') ? parseInt(formData.get('company_id') as string) : null;
+  const first_name = formData.get("first_name") as string;
+  const last_name = formData.get("last_name") as string;
+  const email = formData.get("email") as string;
+  const phone = formData.get("phone") as string;
+  const job_title = formData.get("job_title") as string;
+  const lifecycle_stage = formData.get("lifecycle_stage") as string;
+  const company_id = formData.get("company_id")
+    ? parseInt(formData.get("company_id") as string)
+    : null;
 
-    await query(
-        `UPDATE contacts 
+  await query(
+    `UPDATE contacts 
      SET first_name = $1, last_name = $2, email = $3, phone = $4, job_title = $5, lifecycle_stage = $6, company_id = $7
      WHERE id = $8 AND organization_id = $9`,
-        [first_name, last_name, email, phone, job_title, lifecycle_stage, company_id, id, orgId]
-    );
+    [
+      first_name,
+      last_name,
+      email,
+      phone,
+      job_title,
+      lifecycle_stage,
+      company_id,
+      id,
+      orgId,
+    ],
+  );
 
-    revalidatePath('/contacts');
+  revalidatePath("/contacts");
 }
 
 export async function deleteContact(id: number) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    await query('DELETE FROM contacts WHERE id = $1 AND organization_id = $2', [id, orgId]);
-    revalidatePath('/contacts');
+  await query("DELETE FROM contacts WHERE id = $1 AND organization_id = $2", [
+    id,
+    orgId,
+  ]);
+  revalidatePath("/contacts");
 }
 
 // --- Deals Actions ---
 
 export async function getDeals() {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) return [];
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) return [];
 
-    const result = await query(`
+  const result = await query(
+    `
     SELECT deals.*, companies.name as company_name 
     FROM deals 
     LEFT JOIN companies ON deals.company_id = companies.id 
     WHERE deals.organization_id = $1
     ORDER BY deals.created_at DESC
-  `, [orgId]);
-    return result.rows;
+  `,
+    [orgId],
+  );
+
+  const deals = result.rows;
+  console.log("LOADING ML MODEL NOW...");
+  let model = await loadModel();
+
+  if (!model) {
+    console.log("ML model not found on disk. Training a new one...");
+    model = await trainModel();
+
+    if (model) {
+      await saveModel(model);
+      console.log("ML model trained and saved");
+    }
+  }
+
+  console.log("MODEL:", model);
+
+  if (!model) {
+    console.log("ML model not loaded");
+    return deals;
+  }
+
+  const [stageMetrics, currentStageDurations] = await Promise.all([
+    getStageMetrics(),
+    getCurrentStageDurations(deals.map((deal) => Number(deal.id))),
+  ]);
+
+  for (const deal of deals) {
+    if (deal.stage === "Closed Won" || deal.stage === "Closed Lost") {
+      continue;
+    }
+
+    const features = buildFeatures(
+      deal,
+      stageMetrics,
+      currentStageDurations[Number(deal.id)] ?? 0,
+    );
+    const rawScore = await predictScore(model, features);
+    deal.ai_score = calibrateDealScore(
+      rawScore,
+      deal.stage,
+      stageMetrics,
+      currentStageDurations[Number(deal.id)] ?? 0,
+    );
+  }
+
+  return deals;
 }
 
 export async function createDeal(formData: FormData) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    const name = formData.get('name') as string;
-    const amount = formData.get('amount') ? parseFloat(formData.get('amount') as string) : 0;
-    const stage = formData.get('stage') as string;
-    const close_date = formData.get('close_date') as string;
-    const company_id = formData.get('company_id') ? parseInt(formData.get('company_id') as string) : null;
+  const name = formData.get("name") as string;
+  const amount = formData.get("amount")
+    ? parseFloat(formData.get("amount") as string)
+    : 0;
+  const stage = formData.get("stage") as string;
+  const close_date = formData.get("close_date") as string;
+  const company_id = formData.get("company_id")
+    ? parseInt(formData.get("company_id") as string)
+    : null;
 
+  // Insert deal first
+  const dealResult = await query(
+    `INSERT INTO deals (name, amount, stage, close_date, company_id, organization_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
+    [name, amount, stage, close_date, company_id, orgId],
+  );
+
+  const dealId = dealResult.rows[0]?.id;
+
+  if (dealId) {
+    // Record stage history
     await query(
-        `INSERT INTO deals (name, amount, stage, close_date, company_id, organization_id)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-        [name, amount, stage, close_date, company_id, orgId]
+      `INSERT INTO deal_stage_history (deal_id, stage)
+       VALUES ($1, $2)`,
+      [dealId, stage],
     );
 
-    revalidatePath('/deals');
+    // Call Python ML API to get AI score and save it back
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      const predictRes = await fetch(`${baseUrl}/api/predict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount,
+          num_touchpoints: 5,       // default for new deal
+          email_response_rate: 0.5, // default for new deal
+          discount_requested: 0.1,  // default for new deal
+          demo_completed: false,
+          champion_identified: false,
+          days_in_stage: 0,
+        }),
+      });
+
+      if (predictRes.ok) {
+        const { ai_score } = await predictRes.json();
+        if (ai_score !== null && ai_score !== undefined) {
+          await query(
+            `UPDATE deals SET ai_score = $1 WHERE id = $2`,
+            [ai_score, dealId]
+          );
+        }
+      }
+    } catch (err) {
+      // Non-fatal: deal is saved, AI score is just missing
+      console.warn("[createDeal] Could not get AI score:", err);
+    }
+  }
+
+  revalidatePath("/deals");
 }
 
 export async function updateDealStage(id: number, stage: string) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    await query('UPDATE deals SET stage = $1 WHERE id = $2 AND organization_id = $3', [stage, id, orgId]);
-    revalidatePath('/deals');
+  const currentDeal = await query(
+    "SELECT stage FROM deals WHERE id = $1 AND organization_id = $2",
+    [id, orgId],
+  );
+
+  const currentStage = currentDeal.rows[0]?.stage;
+
+  if (!currentStage || currentStage === stage) {
+    revalidatePath("/deals");
+    return;
+  }
+
+  const updatedDeal = await query(
+    "UPDATE deals SET stage = $1 WHERE id = $2 AND organization_id = $3 RETURNING id",
+    [stage, id, orgId],
+  );
+
+  if (updatedDeal.rows[0]?.id) {
+    await query(
+      `INSERT INTO deal_stage_history (deal_id, stage)
+       VALUES ($1, $2)`,
+      [id, stage],
+    );
+  }
+
+  revalidatePath("/deals");
 }
 
 export async function deleteDeal(id: number) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    await query('DELETE FROM deals WHERE id = $1 AND organization_id = $2', [id, orgId]);
-    revalidatePath('/deals');
+  await query("DELETE FROM deals WHERE id = $1 AND organization_id = $2", [
+    id,
+    orgId,
+  ]);
+  revalidatePath("/deals");
 }
 
 // --- Tasks Actions ---
 
 export async function getTasks() {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) return [];
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) return [];
 
-    const result = await query(`
+  const result = await query(
+    `
     SELECT tasks.*, 
            contacts.first_name as contact_first_name, contacts.last_name as contact_last_name,
            companies.name as company_name
@@ -331,99 +541,153 @@ export async function getTasks() {
     LEFT JOIN companies ON tasks.company_id = companies.id
     WHERE tasks.organization_id = $1
     ORDER BY tasks.due_date ASC
-  `, [orgId]);
-    return result.rows;
+  `,
+    [orgId],
+  );
+  return result.rows;
 }
 
 export async function createTask(formData: FormData) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    const title = formData.get('title') as string;
-    const description = formData.get('description') as string;
-    const due_date = formData.get('due_date') as string;
-    const priority = formData.get('priority') as string;
-    const contact_id = formData.get('contact_id') ? parseInt(formData.get('contact_id') as string) : null;
-    const company_id = formData.get('company_id') ? parseInt(formData.get('company_id') as string) : null;
+  const title = formData.get("title") as string;
+  const description = formData.get("description") as string;
+  const due_date = formData.get("due_date") as string;
+  const priority = formData.get("priority") as string;
+  const contact_id = formData.get("contact_id")
+    ? parseInt(formData.get("contact_id") as string)
+    : null;
+  const company_id = formData.get("company_id")
+    ? parseInt(formData.get("company_id") as string)
+    : null;
 
-    await query(
-        `INSERT INTO tasks (title, description, due_date, priority, contact_id, company_id, organization_id)
+  await query(
+    `INSERT INTO tasks (title, description, due_date, priority, contact_id, company_id, organization_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [title, description, due_date, priority, contact_id, company_id, orgId]
-    );
+    [title, description, due_date, priority, contact_id, company_id, orgId],
+  );
 
-    revalidatePath('/tasks');
+  revalidatePath("/tasks");
 }
 
 export async function updateTaskStatus(id: number, status: string) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    await query('UPDATE tasks SET status = $1 WHERE id = $2 AND organization_id = $3', [status, id, orgId]);
-    revalidatePath('/tasks');
+  await query(
+    "UPDATE tasks SET status = $1 WHERE id = $2 AND organization_id = $3",
+    [status, id, orgId],
+  );
+  revalidatePath("/tasks");
 }
 
 export async function deleteTask(id: number) {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) throw new Error("Unauthorized");
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
 
-    await query('DELETE FROM tasks WHERE id = $1 AND organization_id = $2', [id, orgId]);
-    revalidatePath('/tasks');
+  await query("DELETE FROM tasks WHERE id = $1 AND organization_id = $2", [
+    id,
+    orgId,
+  ]);
+  revalidatePath("/tasks");
 }
 
 // --- Dashboard Actions ---
 
 export async function getDashboardStats() {
-    const session = await auth();
-    const orgId = (session?.user as any)?.organization_id;
-    if (!orgId) return {
-        totalRevenue: 0,
-        activeContacts: 0,
-        pipelineValue: 0,
-        pendingTasks: 0,
-        recentActivity: [],
-        revenueChartData: []
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId)
+    return {
+      totalRevenue: 0,
+      activeContacts: 0,
+      pipelineValue: 0,
+      pendingTasks: 0,
+      recentActivity: [],
+      revenueChartData: [],
     };
 
-    // Total Revenue (Sum of Closed Won deals)
-    const revenueResult = await query(`
+  // Total Revenue (Sum of Closed Won deals)
+  const revenueResult = await query(
+    `
     SELECT SUM(amount) as total 
     FROM deals 
     WHERE stage = 'Closed Won' AND organization_id = $1
-  `, [orgId]);
-    const totalRevenue = revenueResult.rows[0].total || 0;
+  `,
+    [orgId],
+  );
+  const totalRevenue = revenueResult.rows[0].total || 0;
 
-    // Active Contacts Count
-    const contactsResult = await query('SELECT COUNT(*) as count FROM contacts WHERE organization_id = $1', [orgId]);
-    const activeContacts = contactsResult.rows[0].count;
+  // Active Contacts Count
+  const contactsResult = await query(
+    "SELECT COUNT(*) as count FROM contacts WHERE organization_id = $1",
+    [orgId],
+  );
+  const activeContacts = contactsResult.rows[0].count;
 
-    // Sales Pipeline Value (Sum of all open deals)
-    const pipelineResult = await query(`
+  // Sales Pipeline Value (Sum of all open deals)
+  const pipelineResult = await query(
+    `
     SELECT SUM(amount) as total 
     FROM deals 
     WHERE stage != 'Closed Won' AND stage != 'Closed Lost' AND organization_id = $1
-  `, [orgId]);
-    const pipelineValue = pipelineResult.rows[0].total || 0;
+  `,
+    [orgId],
+  );
+  const pipelineValue = pipelineResult.rows[0].total || 0;
 
-    // Meetings/Tasks Count (Pending tasks)
-    const tasksResult = await query("SELECT COUNT(*) as count FROM tasks WHERE status = 'Pending' AND organization_id = $1", [orgId]);
-    const pendingTasks = tasksResult.rows[0].count;
+  const openDeals = await query(
+    `
+SELECT * FROM deals 
+WHERE stage != 'Closed Won' AND stage != 'Closed Lost'
+AND organization_id = $1
+`,
+    [orgId],
+  );
 
-    // Recent Activity (Last 5 actions across tables)
-    const recentActivityResult = await query(`
+  let predictedRevenue = 0;
+
+  for (const deal of openDeals.rows) {
+    let probability = 0.5;
+
+    if (deal.stage === "Contract Sent") probability = 0.8;
+    if (deal.stage === "Decision Maker Bought-In") probability = 0.7;
+    if (deal.stage === "Presentation Scheduled") probability = 0.6;
+    if (deal.stage === "Qualified to Buy") probability = 0.5;
+    if (deal.stage === "Appointment Scheduled") probability = 0.4;
+
+    predictedRevenue += Number(deal.amount ?? 0) * probability;
+  }
+
+  console.log("Predicted Revenue:", predictedRevenue);
+
+  // Meetings/Tasks Count (Pending tasks)
+  const tasksResult = await query(
+    "SELECT COUNT(*) as count FROM tasks WHERE status = 'Pending' AND organization_id = $1",
+    [orgId],
+  );
+  const pendingTasks = tasksResult.rows[0].count;
+
+  // Recent Activity (Last 5 actions across tables)
+  const recentActivityResult = await query(
+    `
     (SELECT 'deal' as type, name as title, created_at FROM deals WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 3)
     UNION ALL
     (SELECT 'task' as type, title as title, created_at FROM tasks WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 3)
     ORDER BY created_at DESC
     LIMIT 5
-  `, [orgId]);
-    const recentActivity = recentActivityResult.rows;
+  `,
+    [orgId],
+  );
+  const recentActivity = recentActivityResult.rows;
 
-    // Revenue by Month (for Chart)
-    const revenueByMonthResult = await query(`
+  // Revenue by Month (for Chart)
+  const revenueByMonthResult = await query(
+    `
     SELECT TO_CHAR(close_date, 'Mon') as name, SUM(amount) as value
     FROM deals 
     WHERE stage = 'Closed Won' 
@@ -431,93 +695,125 @@ export async function getDashboardStats() {
       AND organization_id = $1
     GROUP BY 1, TO_CHAR(close_date, 'YYYY-MM')
     ORDER BY TO_CHAR(close_date, 'YYYY-MM')
-  `, [orgId]);
-    const revenueChartData = revenueByMonthResult.rows;
+  `,
+    [orgId],
+  );
+  const revenueChartData = revenueByMonthResult.rows;
 
-    return {
-        totalRevenue,
-        activeContacts,
-        pipelineValue,
-        pendingTasks,
-        recentActivity,
-        revenueChartData
-    };
+  return {
+    totalRevenue,
+    activeContacts,
+    pipelineValue,
+    predictedRevenue,
+    pendingTasks,
+    recentActivity,
+    revenueChartData,
+  };
 }
 
 // Team Actions
 export async function getTeamMembers() {
-    const session = await auth();
-    const user = session?.user as any;
-    if (!user || !user.organization_id) {
-        return { members: [], invitations: [] };
-    }
+  const session = await auth();
+  const user = session?.user as any;
+  if (!user || !user.organization_id) {
+    return { members: [], invitations: [] };
+  }
 
-    const result = await query(
-        `SELECT id, name, email, created_at FROM users WHERE organization_id = $1 ORDER BY created_at DESC`,
-        [user.organization_id]
-    );
+  const result = await query(
+    `SELECT id, name, email, created_at FROM users WHERE organization_id = $1 ORDER BY created_at DESC`,
+    [user.organization_id],
+  );
 
-    const invitations = await query(
-        `SELECT id, email, status, created_at FROM invitations WHERE organization_id = $1 ORDER BY created_at DESC`,
-        [user.organization_id]
-    );
+  const invitations = await query(
+    `SELECT id, email, status, created_at FROM invitations WHERE organization_id = $1 ORDER BY created_at DESC`,
+    [user.organization_id],
+  );
 
-    return {
-        members: result.rows,
-        invitations: invitations.rows
-    };
+  return {
+    members: result.rows,
+    invitations: invitations.rows,
+  };
 }
 
 export async function inviteUser(formData: FormData) {
-    const session = await auth();
-    const user = session?.user as any;
-    if (!user || !user.organization_id) {
-        return { message: 'Unauthorized', success: false };
-    }
+  const session = await auth();
+  const user = session?.user as any;
+  if (!user || !user.organization_id) {
+    return { message: "Unauthorized", success: false };
+  }
 
-    const email = formData.get('email') as string;
-    
-    // Check if user already exists
-    const existingUser = await query(`SELECT id FROM users WHERE email = $1`, [email]);
-    if (existingUser.rows.length > 0) {
-        return { message: 'User already exists', success: false };
-    }
+  const email = formData.get("email") as string;
 
-    // Check if invitation already exists
-    const existingInvite = await query(`SELECT id FROM invitations WHERE email = $1`, [email]);
-    if (existingInvite.rows.length > 0) {
-        return { message: 'Invitation already sent', success: false };
-    }
+  // Check if user already exists
+  const existingUser = await query(`SELECT id FROM users WHERE email = $1`, [
+    email,
+  ]);
+  if (existingUser.rows.length > 0) {
+    return { message: "User already exists", success: false };
+  }
 
-    const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  // Check if invitation already exists
+  const existingInvite = await query(
+    `SELECT id FROM invitations WHERE email = $1`,
+    [email],
+  );
+  if (existingInvite.rows.length > 0) {
+    return { message: "Invitation already sent", success: false };
+  }
 
-    try {
-        await query(
-            `INSERT INTO invitations (email, organization_id, token) VALUES ($1, $2, $3)`,
-            [email, user.organization_id, token]
-        );
-        revalidatePath('/settings/team');
-        return { message: 'Invitation sent successfully', success: true };
-    } catch (error) {
-        return { message: 'Failed to send invitation', success: false };
-    }
+  const token =
+    Math.random().toString(36).substring(2, 15) +
+    Math.random().toString(36).substring(2, 15);
+
+  try {
+    await query(
+      `INSERT INTO invitations (email, organization_id, token) VALUES ($1, $2, $3)`,
+      [email, user.organization_id, token],
+    );
+    revalidatePath("/settings/team");
+    return { message: "Invitation sent successfully", success: true };
+  } catch (error) {
+    return { message: "Failed to send invitation", success: false };
+  }
 }
 
 export async function revokeInvitation(id: number) {
-    const session = await auth();
-    const user = session?.user as any;
-    if (!user || !user.organization_id) {
-        return { message: 'Unauthorized', success: false };
-    }
+  const session = await auth();
+  const user = session?.user as any;
+  if (!user || !user.organization_id) {
+    return { message: "Unauthorized", success: false };
+  }
 
-    try {
-        await query(
-            `DELETE FROM invitations WHERE id = $1 AND organization_id = $2`,
-            [id, user.organization_id]
-        );
-        revalidatePath('/settings/team');
-        return { message: 'Invitation revoked', success: true };
-    } catch (error) {
-        return { message: 'Failed to revoke invitation', success: false };
-    }
+  try {
+    await query(
+      `DELETE FROM invitations WHERE id = $1 AND organization_id = $2`,
+      [id, user.organization_id],
+    );
+    revalidatePath("/settings/team");
+    return { message: "Invitation revoked", success: true };
+  } catch (error) {
+    return { message: "Failed to revoke invitation", success: false };
+  }
+}
+
+// --- HubSpot Integrations ---
+import { syncTenantDeals } from '@/lib/hubspotClient';
+
+export async function syncFromHubSpot() {
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  
+  if (!orgId) {
+    throw new Error('Unauthorized: Must be logged in to sync deals');
+  }
+
+  try {
+    const totalSynced = await syncTenantDeals(orgId);
+    revalidatePath('/deals');
+    revalidatePath('/dashboard');
+    return { success: true, count: totalSynced };
+  } catch (error: any) {
+    console.error('HubSpot Sync Failed:', error);
+    return { success: false, message: error.message };
+  }
 }

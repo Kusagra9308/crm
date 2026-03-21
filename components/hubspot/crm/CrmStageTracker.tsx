@@ -13,45 +13,46 @@ export function CrmStageTracker({ stages, currentStage, onStageClick, className 
     const currentIndex = stages.indexOf(currentStage);
 
     return (
-        <div className={cn("w-full overflow-x-auto", className)}>
-            <div className="flex items-center min-w-max">
+        <div className={cn("w-full", className)}>
+            <div className="flex items-center justify-between w-full pr-4">
                 {stages.map((stage, index) => {
-                    const isCompleted = index < currentIndex;
-                    const isCurrent = index === currentIndex;
-                    const isFuture = index > currentIndex;
+                    const isActive = currentStage === stage;
+                    const isCompleted = stages.indexOf(currentStage) > index;
+                    const isLast = index === stages.length - 1;
 
                     return (
                         <div
                             key={stage}
                             className={cn(
-                                "flex items-center relative group cursor-pointer",
-                                index !== stages.length - 1 && "flex-1"
+                                "flex items-center",
+                                !isLast && "flex-1"
                             )}
                             onClick={() => onStageClick?.(stage)}
                         >
-                            <div className={cn(
-                                "flex items-center justify-center w-8 h-8 rounded-full border-2 transition-colors z-10",
-                                isCompleted && "bg-primary border-primary text-primary-foreground",
-                                isCurrent && "bg-background border-primary text-primary",
-                                isFuture && "bg-background border-muted text-muted-foreground"
-                            )}>
-                                {isCompleted ? (
-                                    <Check className="h-4 w-4" />
-                                ) : (
-                                    <span className="text-xs font-medium">{index + 1}</span>
-                                )}
-                            </div>
-
-                            {/* Label */}
-                            <div className="absolute top-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs font-medium text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
-                                {stage}
-                            </div>
-
-                            {/* Connector Line */}
-                            {index !== stages.length - 1 && (
+                            <div className="flex flex-col items-center gap-2 relative group cursor-pointer">
                                 <div className={cn(
-                                    "h-0.5 flex-1 mx-2 transition-colors",
-                                    index < currentIndex ? "bg-primary" : "bg-muted"
+                                    "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium border-2 transition-all duration-200 z-10",
+                                    isCompleted && "bg-primary border-primary text-white",
+                                    isActive && "border-primary text-primary bg-white shadow-sm ring-2 ring-primary/20",
+                                    !isCompleted && !isActive && "border-gray-300 text-gray-500 bg-white"
+                                )}>
+                                    {isCompleted ? (
+                                        <Check className="h-4 w-4" />
+                                    ) : (
+                                        <span>{index + 1}</span>
+                                    )}
+                                </div>
+
+                                {/* Tooltip label */}
+                                <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                    {stage}
+                                </div>
+                            </div>
+
+                            {!isLast && (
+                                <div className={cn(
+                                    "flex-1 h-[2px] mx-2 transition-all duration-300",
+                                    isCompleted ? "bg-primary" : "bg-gray-300"
                                 )} />
                             )}
                         </div>

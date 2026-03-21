@@ -7,7 +7,7 @@ import { query } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 
 const navigation = [
-    { name: "Dashboard", href: "/", icon: LayoutDashboard },
+    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { name: "Contacts", href: "/contacts", icon: Users },
     { name: "Companies", href: "/companies", icon: Building2 },
     { name: "Deals", href: "/deals", icon: BarChart3 },
@@ -57,15 +57,6 @@ export async function Sidebar() {
                 </nav>
             </div>
             <div className="p-4 border-t border-border/50">
-                <a
-                    href="https://github.com/prat011/open-hubspot"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 w-full bg-slate-900 hover:bg-slate-800 text-white p-2 rounded-md transition-colors text-sm font-medium"
-                >
-                    <Github className="h-4 w-4" />
-                    <span>Star on GitHub</span>
-                </a>
                 <div className="mt-4 flex items-center gap-3 px-2">
                     <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold">
                         {user?.name?.[0] || 'U'}

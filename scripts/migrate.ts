@@ -1,5 +1,6 @@
 import { query } from '../lib/db';
 import bcrypt from 'bcryptjs';
+import 'dotenv/config'
 
 async function migrate() {
   try {
@@ -126,22 +127,16 @@ async function migrate() {
     `);
     console.log('Created tasks table');
 
-    // Create Tasks table
+    // Create Deal Stage History table
     await query(`
-      CREATE TABLE IF NOT EXISTS tasks (
+      CREATE TABLE IF NOT EXISTS deal_stage_history (
         id SERIAL PRIMARY KEY,
-        title VARCHAR(255) NOT NULL,
-        description TEXT,
-        due_date TIMESTAMP,
-        priority VARCHAR(50) DEFAULT 'Medium',
-        status VARCHAR(50) DEFAULT 'Pending',
-        contact_id INTEGER REFERENCES contacts(id),
-        company_id INTEGER REFERENCES companies(id),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        organization_id INTEGER REFERENCES organizations(id)
+        deal_id INTEGER REFERENCES deals(id) ON DELETE CASCADE,
+        stage VARCHAR(50) NOT NULL,
+        entered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    console.log('Created tasks table');
+    console.log('Created deal_stage_history table');
 
     // Seed Data
 
