@@ -5,12 +5,9 @@ import { revalidatePath } from "next/cache";
 import { signIn, signOut, auth } from "@/auth";
 import { AuthError } from "next-auth";
 import bcrypt from "bcryptjs";
-import { calibrateDealScore } from "@/lib/ml/calibration";
-import { buildFeatures } from "@/lib/ml/features";
-import { getCurrentStageDurations, getStageMetrics } from "@/lib/ml/historyFeatures";
-import { loadModel, predictScore, saveModel } from "@/lib/ml/model";
-import { trainModel } from "@/lib/ml/trainModel";
-import { predictDeal } from "@/lib/ml/predict";
+import { syncTenantDeals } from '@/lib/hubspotClient';
+
+
 
 export async function authenticate(
   prevState: string | undefined,
@@ -364,49 +361,6 @@ export async function getDeals() {
   );
 
   const deals = result.rows;
-  console.log("LOADING ML MODEL NOW...");
-  let model = await loadModel();
-
-  if (!model) {
-    console.log("ML model not found on disk. Training a new one...");
-    model = await trainModel();
-
-    if (model) {
-      await saveModel(model);
-      console.log("ML model trained and saved");
-    }
-  }
-
-  console.log("MODEL:", model);
-
-  if (!model) {
-    console.log("ML model not loaded");
-    return deals;
-  }
-
-  const [stageMetrics, currentStageDurations] = await Promise.all([
-    getStageMetrics(),
-    getCurrentStageDurations(deals.map((deal) => Number(deal.id))),
-  ]);
-
-  for (const deal of deals) {
-    if (deal.stage === "Closed Won" || deal.stage === "Closed Lost") {
-      continue;
-    }
-
-    const features = buildFeatures(
-      deal,
-      stageMetrics,
-      currentStageDurations[Number(deal.id)] ?? 0,
-    );
-    const rawScore = await predictScore(model, features);
-    deal.ai_score = calibrateDealScore(
-      rawScore,
-      deal.stage,
-      stageMetrics,
-      currentStageDurations[Number(deal.id)] ?? 0,
-    );
-  }
 
   return deals;
 }
@@ -426,7 +380,7 @@ export async function createDeal(formData: FormData) {
     ? parseInt(formData.get("company_id") as string)
     : null;
 
-  // Insert deal first
+    // Insert deal first
   const dealResult = await query(
     `INSERT INTO deals (name, amount, stage, close_date, company_id, organization_id)
      VALUES ($1, $2, $3, $4, $5, $6)
@@ -480,59 +434,59 @@ export async function createDeal(formData: FormData) {
 }
 
 export async function updateDealStage(id: number, stage: string) {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organization_id;
-  if (!orgId) throw new Error("Unauthorized");
+    const session = await auth();
+    const orgId = (session?.user as any)?.organization_id;
+    if (!orgId) throw new Error("Unauthorized");
 
-  const currentDeal = await query(
-    "SELECT stage FROM deals WHERE id = $1 AND organization_id = $2",
-    [id, orgId],
-  );
-
-  const currentStage = currentDeal.rows[0]?.stage;
-
-  if (!currentStage || currentStage === stage) {
-    revalidatePath("/deals");
-    return;
-  }
-
-  const updatedDeal = await query(
-    "UPDATE deals SET stage = $1 WHERE id = $2 AND organization_id = $3 RETURNING id",
-    [stage, id, orgId],
-  );
-
-  if (updatedDeal.rows[0]?.id) {
-    await query(
-      `INSERT INTO deal_stage_history (deal_id, stage)
-       VALUES ($1, $2)`,
-      [id, stage],
+    const currentDeal = await query(
+      "SELECT stage FROM deals WHERE id = $1 AND organization_id = $2",
+      [id, orgId],
     );
-  }
 
-  revalidatePath("/deals");
+    const currentStage = currentDeal.rows[0]?.stage;
+
+    if (!currentStage || currentStage === stage) {
+      revalidatePath("/deals");
+      return;
+    }
+
+    const updatedDeal = await query(
+      "UPDATE deals SET stage = $1 WHERE id = $2 AND organization_id = $3 RETURNING id",
+      [stage, id, orgId],
+    );
+
+    if (updatedDeal.rows[0]?.id) {
+      await query(
+        `INSERT INTO deal_stage_history (deal_id, stage)
+       VALUES ($1, $2)`,
+        [id, stage],
+      );
+    }
+
+    revalidatePath("/deals");
 }
 
 export async function deleteDeal(id: number) {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organization_id;
-  if (!orgId) throw new Error("Unauthorized");
+    const session = await auth();
+    const orgId = (session?.user as any)?.organization_id;
+    if (!orgId) throw new Error("Unauthorized");
 
-  await query("DELETE FROM deals WHERE id = $1 AND organization_id = $2", [
-    id,
-    orgId,
-  ]);
-  revalidatePath("/deals");
+    await query("DELETE FROM deals WHERE id = $1 AND organization_id = $2", [
+      id,
+      orgId,
+    ]);
+    revalidatePath("/deals");
 }
 
 // --- Tasks Actions ---
 
 export async function getTasks() {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organization_id;
-  if (!orgId) return [];
+    const session = await auth();
+    const orgId = (session?.user as any)?.organization_id;
+    if (!orgId) return [];
 
-  const result = await query(
-    `
+    const result = await query(
+      `
     SELECT tasks.*, 
            contacts.first_name as contact_first_name, contacts.last_name as contact_last_name,
            companies.name as company_name
@@ -542,152 +496,152 @@ export async function getTasks() {
     WHERE tasks.organization_id = $1
     ORDER BY tasks.due_date ASC
   `,
-    [orgId],
-  );
-  return result.rows;
+      [orgId],
+    );
+    return result.rows;
 }
 
 export async function createTask(formData: FormData) {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organization_id;
-  if (!orgId) throw new Error("Unauthorized");
+    const session = await auth();
+    const orgId = (session?.user as any)?.organization_id;
+    if (!orgId) throw new Error("Unauthorized");
 
-  const title = formData.get("title") as string;
-  const description = formData.get("description") as string;
-  const due_date = formData.get("due_date") as string;
-  const priority = formData.get("priority") as string;
-  const contact_id = formData.get("contact_id")
-    ? parseInt(formData.get("contact_id") as string)
-    : null;
-  const company_id = formData.get("company_id")
-    ? parseInt(formData.get("company_id") as string)
-    : null;
+    const title = formData.get("title") as string;
+    const description = formData.get("description") as string;
+    const due_date = formData.get("due_date") as string;
+    const priority = formData.get("priority") as string;
+    const contact_id = formData.get("contact_id")
+      ? parseInt(formData.get("contact_id") as string)
+      : null;
+    const company_id = formData.get("company_id")
+      ? parseInt(formData.get("company_id") as string)
+      : null;
 
-  await query(
-    `INSERT INTO tasks (title, description, due_date, priority, contact_id, company_id, organization_id)
+    await query(
+      `INSERT INTO tasks (title, description, due_date, priority, contact_id, company_id, organization_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [title, description, due_date, priority, contact_id, company_id, orgId],
-  );
+      [title, description, due_date, priority, contact_id, company_id, orgId],
+    );
 
-  revalidatePath("/tasks");
+    revalidatePath("/tasks");
 }
 
 export async function updateTaskStatus(id: number, status: string) {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organization_id;
-  if (!orgId) throw new Error("Unauthorized");
+    const session = await auth();
+    const orgId = (session?.user as any)?.organization_id;
+    if (!orgId) throw new Error("Unauthorized");
 
-  await query(
-    "UPDATE tasks SET status = $1 WHERE id = $2 AND organization_id = $3",
-    [status, id, orgId],
-  );
-  revalidatePath("/tasks");
-}
+    await query(
+      "UPDATE tasks SET status = $1 WHERE id = $2 AND organization_id = $3",
+      [status, id, orgId],
+    );
+    revalidatePath("/tasks");
+  }
 
 export async function deleteTask(id: number) {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organization_id;
-  if (!orgId) throw new Error("Unauthorized");
+    const session = await auth();
+    const orgId = (session?.user as any)?.organization_id;
+    if (!orgId) throw new Error("Unauthorized");
 
-  await query("DELETE FROM tasks WHERE id = $1 AND organization_id = $2", [
-    id,
-    orgId,
-  ]);
-  revalidatePath("/tasks");
+    await query("DELETE FROM tasks WHERE id = $1 AND organization_id = $2", [
+      id,
+      orgId,
+    ]);
+    revalidatePath("/tasks");
 }
 
 // --- Dashboard Actions ---
 
 export async function getDashboardStats() {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organization_id;
-  if (!orgId)
-    return {
-      totalRevenue: 0,
-      activeContacts: 0,
-      pipelineValue: 0,
-      pendingTasks: 0,
-      recentActivity: [],
-      revenueChartData: [],
-    };
+    const session = await auth();
+    const orgId = (session?.user as any)?.organization_id;
+    if (!orgId)
+      return {
+        totalRevenue: 0,
+        activeContacts: 0,
+        pipelineValue: 0,
+        pendingTasks: 0,
+        recentActivity: [],
+        revenueChartData: [],
+      };
 
-  // Total Revenue (Sum of Closed Won deals)
-  const revenueResult = await query(
-    `
+    // Total Revenue (Sum of Closed Won deals)
+    const revenueResult = await query(
+      `
     SELECT SUM(amount) as total 
     FROM deals 
     WHERE stage = 'Closed Won' AND organization_id = $1
   `,
-    [orgId],
-  );
-  const totalRevenue = revenueResult.rows[0].total || 0;
+      [orgId],
+    );
+    const totalRevenue = revenueResult.rows[0].total || 0;
 
-  // Active Contacts Count
-  const contactsResult = await query(
-    "SELECT COUNT(*) as count FROM contacts WHERE organization_id = $1",
-    [orgId],
-  );
-  const activeContacts = contactsResult.rows[0].count;
+    // Active Contacts Count
+    const contactsResult = await query(
+      "SELECT COUNT(*) as count FROM contacts WHERE organization_id = $1",
+      [orgId],
+    );
+    const activeContacts = contactsResult.rows[0].count;
 
-  // Sales Pipeline Value (Sum of all open deals)
-  const pipelineResult = await query(
-    `
+    // Sales Pipeline Value (Sum of all open deals)
+    const pipelineResult = await query(
+      `
     SELECT SUM(amount) as total 
     FROM deals 
     WHERE stage != 'Closed Won' AND stage != 'Closed Lost' AND organization_id = $1
   `,
-    [orgId],
-  );
-  const pipelineValue = pipelineResult.rows[0].total || 0;
+      [orgId],
+    );
+    const pipelineValue = pipelineResult.rows[0].total || 0;
 
-  const openDeals = await query(
-    `
+    const openDeals = await query(
+      `
 SELECT * FROM deals 
 WHERE stage != 'Closed Won' AND stage != 'Closed Lost'
 AND organization_id = $1
 `,
-    [orgId],
-  );
+      [orgId],
+    );
 
-  let predictedRevenue = 0;
+    let predictedRevenue = 0;
 
-  for (const deal of openDeals.rows) {
-    let probability = 0.5;
+    for (const deal of openDeals.rows) {
+      let probability = 0.5;
 
-    if (deal.stage === "Contract Sent") probability = 0.8;
-    if (deal.stage === "Decision Maker Bought-In") probability = 0.7;
-    if (deal.stage === "Presentation Scheduled") probability = 0.6;
-    if (deal.stage === "Qualified to Buy") probability = 0.5;
-    if (deal.stage === "Appointment Scheduled") probability = 0.4;
+      if (deal.stage === "Contract Sent") probability = 0.8;
+      if (deal.stage === "Decision Maker Bought-In") probability = 0.7;
+      if (deal.stage === "Presentation Scheduled") probability = 0.6;
+      if (deal.stage === "Qualified to Buy") probability = 0.5;
+      if (deal.stage === "Appointment Scheduled") probability = 0.4;
 
-    predictedRevenue += Number(deal.amount ?? 0) * probability;
-  }
+      predictedRevenue += Number(deal.amount ?? 0) * probability;
+    }
 
-  console.log("Predicted Revenue:", predictedRevenue);
+    console.log("Predicted Revenue:", predictedRevenue);
 
-  // Meetings/Tasks Count (Pending tasks)
-  const tasksResult = await query(
-    "SELECT COUNT(*) as count FROM tasks WHERE status = 'Pending' AND organization_id = $1",
-    [orgId],
-  );
-  const pendingTasks = tasksResult.rows[0].count;
+    // Meetings/Tasks Count (Pending tasks)
+    const tasksResult = await query(
+      "SELECT COUNT(*) as count FROM tasks WHERE status = 'Pending' AND organization_id = $1",
+      [orgId],
+    );
+    const pendingTasks = tasksResult.rows[0].count;
 
-  // Recent Activity (Last 5 actions across tables)
-  const recentActivityResult = await query(
-    `
+    // Recent Activity (Last 5 actions across tables)
+    const recentActivityResult = await query(
+      `
     (SELECT 'deal' as type, name as title, created_at FROM deals WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 3)
     UNION ALL
     (SELECT 'task' as type, title as title, created_at FROM tasks WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 3)
     ORDER BY created_at DESC
     LIMIT 5
   `,
-    [orgId],
-  );
-  const recentActivity = recentActivityResult.rows;
+      [orgId],
+    );
+    const recentActivity = recentActivityResult.rows;
 
-  // Revenue by Month (for Chart)
-  const revenueByMonthResult = await query(
-    `
+    // Revenue by Month (for Chart)
+    const revenueByMonthResult = await query(
+      `
     SELECT TO_CHAR(close_date, 'Mon') as name, SUM(amount) as value
     FROM deals 
     WHERE stage = 'Closed Won' 
@@ -696,124 +650,123 @@ AND organization_id = $1
     GROUP BY 1, TO_CHAR(close_date, 'YYYY-MM')
     ORDER BY TO_CHAR(close_date, 'YYYY-MM')
   `,
-    [orgId],
-  );
-  const revenueChartData = revenueByMonthResult.rows;
+      [orgId],
+    );
+    const revenueChartData = revenueByMonthResult.rows;
 
-  return {
-    totalRevenue,
-    activeContacts,
-    pipelineValue,
-    predictedRevenue,
-    pendingTasks,
-    recentActivity,
-    revenueChartData,
-  };
+    return {
+      totalRevenue,
+      activeContacts,
+      pipelineValue,
+      predictedRevenue,
+      pendingTasks,
+      recentActivity,
+      revenueChartData,
+    };
 }
 
 // Team Actions
 export async function getTeamMembers() {
-  const session = await auth();
-  const user = session?.user as any;
-  if (!user || !user.organization_id) {
-    return { members: [], invitations: [] };
-  }
+    const session = await auth();
+    const user = session?.user as any;
+    if (!user || !user.organization_id) {
+      return { members: [], invitations: [] };
+    }
 
-  const result = await query(
-    `SELECT id, name, email, created_at FROM users WHERE organization_id = $1 ORDER BY created_at DESC`,
-    [user.organization_id],
-  );
+    const result = await query(
+      `SELECT id, name, email, created_at FROM users WHERE organization_id = $1 ORDER BY created_at DESC`,
+      [user.organization_id],
+    );
 
-  const invitations = await query(
-    `SELECT id, email, status, created_at FROM invitations WHERE organization_id = $1 ORDER BY created_at DESC`,
-    [user.organization_id],
-  );
+    const invitations = await query(
+      `SELECT id, email, status, created_at FROM invitations WHERE organization_id = $1 ORDER BY created_at DESC`,
+      [user.organization_id],
+    );
 
-  return {
-    members: result.rows,
-    invitations: invitations.rows,
-  };
+    return {
+      members: result.rows,
+      invitations: invitations.rows,
+    };
 }
 
 export async function inviteUser(formData: FormData) {
-  const session = await auth();
-  const user = session?.user as any;
-  if (!user || !user.organization_id) {
-    return { message: "Unauthorized", success: false };
-  }
+    const session = await auth();
+    const user = session?.user as any;
+    if (!user || !user.organization_id) {
+      return { message: "Unauthorized", success: false };
+    }
 
-  const email = formData.get("email") as string;
+    const email = formData.get("email") as string;
 
-  // Check if user already exists
-  const existingUser = await query(`SELECT id FROM users WHERE email = $1`, [
-    email,
-  ]);
-  if (existingUser.rows.length > 0) {
-    return { message: "User already exists", success: false };
-  }
+    // Check if user already exists
+    const existingUser = await query(`SELECT id FROM users WHERE email = $1`, [
+      email,
+    ]);
+    if (existingUser.rows.length > 0) {
+      return { message: "User already exists", success: false };
+    }
 
-  // Check if invitation already exists
-  const existingInvite = await query(
-    `SELECT id FROM invitations WHERE email = $1`,
-    [email],
-  );
-  if (existingInvite.rows.length > 0) {
-    return { message: "Invitation already sent", success: false };
-  }
-
-  const token =
-    Math.random().toString(36).substring(2, 15) +
-    Math.random().toString(36).substring(2, 15);
-
-  try {
-    await query(
-      `INSERT INTO invitations (email, organization_id, token) VALUES ($1, $2, $3)`,
-      [email, user.organization_id, token],
+    // Check if invitation already exists
+    const existingInvite = await query(
+      `SELECT id FROM invitations WHERE email = $1`,
+      [email],
     );
-    revalidatePath("/settings/team");
-    return { message: "Invitation sent successfully", success: true };
-  } catch (error) {
-    return { message: "Failed to send invitation", success: false };
-  }
+    if (existingInvite.rows.length > 0) {
+      return { message: "Invitation already sent", success: false };
+    }
+
+    const token =
+      Math.random().toString(36).substring(2, 15) +
+      Math.random().toString(36).substring(2, 15);
+
+    try {
+      await query(
+        `INSERT INTO invitations (email, organization_id, token) VALUES ($1, $2, $3)`,
+        [email, user.organization_id, token],
+      );
+      revalidatePath("/settings/team");
+      return { message: "Invitation sent successfully", success: true };
+    } catch (error) {
+      return { message: "Failed to send invitation", success: false };
+    }
 }
 
 export async function revokeInvitation(id: number) {
-  const session = await auth();
-  const user = session?.user as any;
-  if (!user || !user.organization_id) {
-    return { message: "Unauthorized", success: false };
-  }
+    const session = await auth();
+    const user = session?.user as any;
+    if (!user || !user.organization_id) {
+      return { message: "Unauthorized", success: false };
+    }
 
-  try {
-    await query(
-      `DELETE FROM invitations WHERE id = $1 AND organization_id = $2`,
-      [id, user.organization_id],
-    );
-    revalidatePath("/settings/team");
-    return { message: "Invitation revoked", success: true };
-  } catch (error) {
-    return { message: "Failed to revoke invitation", success: false };
-  }
+    try {
+      await query(
+        `DELETE FROM invitations WHERE id = $1 AND organization_id = $2`,
+        [id, user.organization_id],
+      );
+      revalidatePath("/settings/team");
+      return { message: "Invitation revoked", success: true };
+    } catch (error) {
+      return { message: "Failed to revoke invitation", success: false };
+    }
 }
 
 // --- HubSpot Integrations ---
-import { syncTenantDeals } from '@/lib/hubspotClient';
 
 export async function syncFromHubSpot() {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organization_id;
-  
-  if (!orgId) {
-    throw new Error('Unauthorized: Must be logged in to sync deals');
-  }
+    const session = await auth();
+    const orgId = (session?.user as any)?.organization_id;
 
-  try {
-    const totalSynced = await syncTenantDeals(orgId);
-    revalidatePath('/deals');
-    revalidatePath('/dashboard');
-    return { success: true, count: totalSynced };
-  } catch (error: any) {
-    console.error('HubSpot Sync Failed:', error);
-    return { success: false, message: error.message };
+    if (!orgId) {
+      throw new Error('Unauthorized: Must be logged in to sync deals');
+    }
+
+    try {
+      const totalSynced = await syncTenantDeals(orgId);
+      revalidatePath('/deals');
+      revalidatePath('/dashboard');
+      return { success: true, count: totalSynced };
+    } catch (error: any) {
+      console.error('HubSpot Sync Failed:', error);
+      return { success: false, message: error.message };
+    }
   }
-}
