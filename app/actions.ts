@@ -655,7 +655,7 @@ AND organization_id = $1
     [orgId],
   );
   const revenueChartData = revenueByMonthResult.rows;
-  const insight = getInsight(revenueChartData);
+  insight = getInsight(revenueChartData);
   return {
     totalRevenue,
     activeContacts,
@@ -664,6 +664,7 @@ AND organization_id = $1
     pendingTasks,
     recentActivity,
     revenueChartData,
+    insight,
   };
 }
 
