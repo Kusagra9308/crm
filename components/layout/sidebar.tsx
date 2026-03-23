@@ -90,6 +90,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { logout } from "@/app/actions";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -155,8 +156,8 @@ export default function Sidebar({ orgName, user }: any) {
             </p>
           </div>
 
-          <form action="/api/logout" method="post">
-            <Button variant="ghost" size="icon" className="h-8 w-8">
+          <form action={logout}>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive">
               <LogOut className="h-4 w-4" />
             </Button>
           </form>

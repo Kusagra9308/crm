@@ -18,7 +18,9 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+    # Use require instead of verify-full to avoid local CA certificate issues
+    url = DATABASE_URL.replace("sslmode=verify-full", "sslmode=require")
+    return psycopg2.connect(url)
 
 np.random.seed(42)
 random.seed(42)

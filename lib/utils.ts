@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 
-export function predictNextRevenue(data: { value: number }[]) {
+export function predictNextRevenue(data: { value: any }[]) {
   const n = data.length;
   if (n < 2) return null;
 
@@ -17,7 +17,7 @@ export function predictNextRevenue(data: { value: number }[]) {
 
   for (let i = 0; i < n; i++) {
     const x = i + 1;
-    const y = data[i].value;
+    const y = Number(data[i].value) || 0; // Force numeric type
 
     sumX += x;
     sumY += y;
@@ -25,10 +25,10 @@ export function predictNextRevenue(data: { value: number }[]) {
     sumXX += x * x;
   }
 
-  const slope =
-    (n * sumXY - sumX * sumY) /
-    (n * sumXX - sumX * sumX);
+  const denominator = (n * sumXX - sumX * sumX);
+  if (denominator === 0) return null; // Avoid division by zero
 
+  const slope = (n * sumXY - sumX * sumY) / denominator;
   const intercept = (sumY - slope * sumX) / n;
 
   const nextX = n + 1;

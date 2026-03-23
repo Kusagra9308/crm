@@ -1,6 +1,7 @@
 "use client";
 
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 import {
   BarChart3,
@@ -22,6 +23,8 @@ import { motion } from "framer-motion";
 import { Statistics } from "@/components/hubspot/Statistics";
 
 export default function DashboardClient({ stats }: { stats: any }) {
+  if (!stats) return <div className="p-8">Loading dashboard...</div>;
+
   const {
     totalRevenue,
     activeContacts,
@@ -31,6 +34,13 @@ export default function DashboardClient({ stats }: { stats: any }) {
     recentActivity,
     revenueChartData,
     insight,
+    revenueChange = "0%",
+    contactsChange = "0%",
+    pipelineChange = "0%",
+    tasksChange = "0%",
+    predictedChange = "0%",
+    weightedRevenue = 0,
+    pipelineHealth = 0,
   } = stats;
 
   const chartData =
@@ -45,101 +55,147 @@ export default function DashboardClient({ stats }: { stats: any }) {
           { name: "Jun", value: 0 },
         ];
 
-  const cards = [
-    {
-      title: "Total Revenue",
-      value: `₹${Number(totalRevenue).toLocaleString("en-IN")}`,
-      change: "+12.5",
-      icon: IndianRupee,
-      color: "text-emerald-500",
-      bg: "bg-emerald-500/10",
-    },
+  // Helper for trend colors and sanitizing NaN
+  const getTrendData = (changeString: string = "0%") => {
+    if (!changeString || changeString.includes("NaN")) return { color: "text-muted-foreground", value: "--", direction: "neutral" };
+    const isPositive = changeString.startsWith("+");
+    const isNegative = changeString.startsWith("-");
+    return {
+      color: isPositive ? "text-emerald-500" : isNegative ? "text-rose-500" : "text-muted-foreground",
+      value: changeString,
+      direction: isPositive ? "up" : isNegative ? "down" : "neutral"
+    };
+  };
+
+  const heroCard = {
+    title: "Total Revenue",
+    value: `₹${Number(totalRevenue).toLocaleString("en-IN")}`,
+    trend: getTrendData(revenueChange),
+    icon: IndianRupee,
+  };
+
+  const secondaryCards = [
     {
       title: "Active Contacts",
       value: Number(activeContacts).toLocaleString("en-IN"),
-      change: "+4.3",
+      trend: getTrendData(contactsChange),
       icon: Users,
-      color: "text-blue-500",
-      bg: "bg-blue-500/10",
     },
     {
       title: "Sales Pipeline",
       value: `₹${Number(pipelineValue).toLocaleString("en-IN")}`,
-      change: "+8.2",
+      trend: getTrendData(pipelineChange),
       icon: TrendingUp,
-      color: "text-purple-500",
-      bg: "bg-purple-500/10",
     },
     {
-      title: "Predicted Revenue",
-      value: `₹${Number(predictedRevenue).toLocaleString("en-IN")}`,
-      change: "+10.1",
+      title: "Weighted Forecast",
+      value: `₹${Number(weightedRevenue).toLocaleString("en-IN")}`,
+      trend: { value: "AI Target", color: "text-blue-500" },
       icon: BarChart3,
-      color: "text-cyan-500",
-      bg: "bg-cyan-500/10",
     },
     {
-      title: "Pending Tasks",
-      value: Number(pendingTasks).toLocaleString("en-IN"),
-      change: "-2",
-      icon: Calendar,
-      color: "text-orange-500",
-      bg: "bg-orange-500/10",
+      title: "Pipeline Health",
+      value: `${Math.round(pipelineHealth)}%`,
+      trend: { value: "Avg. Win Prob", color: "text-muted-foreground" },
+      icon: TrendingUp,
     },
   ];
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 pb-10">
       {/* HEADER */}
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-        <p className="text-muted-foreground">
-          Overview of your business performance.
-        </p>
-      </div>
-
-      {/* AI INSIGHT STRIP */}
-      <div className="rounded-xl border border-border/50 bg-primary/5 p-4 flex items-center justify-between">
+      <div className="flex items-end justify-between">
         <div>
-          <p className="text-sm font-medium">AI Insight</p>
-          <p className="text-sm text-muted-foreground">
-            {insight && insight.change !== 0 ? (
-              <>
-                Revenue likely to {insight.change > 0 ? "increase" : "decrease"} by{" "}
-                {Math.abs(insight.change)}% next month 🚀
-              </>
-            ) : (
-              "Add more closed deals to generate AI insights."
-            )}
+          <h2 className="text-4xl font-extrabold tracking-tight">Overview</h2>
+          <p className="text-muted-foreground text-lg">
+            A real-time snapshot of your organization's performance.
           </p>
         </div>
-        <TrendingUp className="h-5 w-5 text-primary" />
+        <div className="text-right hidden md:block">
+           <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest">Global Status</p>
+           <div className="flex items-center gap-2 text-emerald-500 font-bold">
+              <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              Live Data Active
+           </div>
+        </div>
       </div>
 
-      {/* STATS */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {cards.map((card, index) => (
+      {/* HERO SECTION */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative overflow-hidden group"
+      >
+        <Card className="p-8 border-none bg-gradient-to-br from-slate-900 to-slate-800 text-white shadow-2xl relative z-10">
+           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <div className="space-y-2">
+                 <p className="text-slate-400 font-medium tracking-wide uppercase text-xs">{heroCard.title}</p>
+                 <h1 className="text-5xl md:text-6xl font-black">{heroCard.value}</h1>
+                 <div className="flex items-center gap-2 mt-2">
+                    <span className={`text-sm font-bold flex items-center gap-1 ${heroCard.trend.color}`}>
+                       {heroCard.trend.value} vs last month
+                    </span>
+                    <span className="text-slate-500 text-sm">• Monthly Performance</span>
+                 </div>
+              </div>
+              <div className="h-20 w-20 rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 flex items-center justify-center">
+                 <heroCard.icon className="h-10 w-10 text-primary" />
+              </div>
+           </div>
+
+           {/* Decorative background flare */}
+           <div className="absolute -top-24 -right-24 h-64 w-64 bg-primary/20 rounded-full blur-[80px] pointer-events-none" />
+           <div className="absolute -bottom-24 -left-24 h-64 w-64 bg-orange-600/10 rounded-full blur-[80px] pointer-events-none" />
+        </Card>
+      </motion.div>
+
+      {/* AI INSIGHT STRIP */}
+      <div className="rounded-2xl border border-border/40 bg-muted/30 p-4 flex items-center justify-between backdrop-blur-sm">
+        <div className="flex items-center gap-4">
+          <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
+             <TrendingUp className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <p className="text-sm font-bold tracking-tight">AI REVENUE CO-PILOT</p>
+            <p className="text-sm text-muted-foreground">
+              {insight && insight.change !== 0 ? (
+                <>
+                  Revenue likely to {insight.change > 0 ? "increase" : "decrease"} by{" "}
+                  <span className="font-bold text-foreground">{Math.abs(insight.change)}%</span> next month 🚀
+                </>
+              ) : (
+                "Add more closed deals to generate AI insights."
+              )}
+            </p>
+          </div>
+        </div>
+        <Button variant="outline" size="sm" className="hidden sm:flex rounded-lg border-primary/20 hover:bg-primary/5">
+           View Predictions
+        </Button>
+      </div>
+
+      {/* SECONDARY STATS GRID */}
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+        {secondaryCards.map((card, index) => (
           <motion.div
             key={card.title}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            whileHover={{ scale: 1.02 }}
-            transition={{ delay: index * 0.1 }}
+            transition={{ delay: 0.1 + index * 0.05 }}
           >
-            <Card className="p-6 hover:shadow-lg transition-all hover:-translate-y-1">
-              <div className="flex items-center justify-between">
-                <Statistics
-                  label={card.title}
-                  value={card.value}
-                  trend={{
-                    value: parseFloat(card.change),
-                    direction: card.change.includes("+")
-                      ? "increase"
-                      : "decrease",
-                  }}
-                />
-                <div className={`p-2 rounded-full ${card.bg}`}>
-                  <card.icon className={`h-4 w-4 ${card.color}`} />
+            <Card className="p-6 h-full hover:shadow-xl transition-all border-border/50 bg-card/50 hover:bg-card">
+              <div className="flex flex-col h-full justify-between gap-4">
+                <div className="flex items-center justify-between">
+                   <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center">
+                      <card.icon className="h-5 w-5 text-muted-foreground" />
+                   </div>
+                   <span className={`text-xs font-bold px-2 py-1 rounded-md bg-muted ${card.trend.color}`}>
+                      {card.trend.value}
+                   </span>
+                </div>
+                <div className="space-y-1">
+                   <p className="text-sm text-muted-foreground font-medium">{card.title}</p>
+                   <p className="text-2xl font-bold tracking-tight">{card.value}</p>
                 </div>
               </div>
             </Card>
@@ -147,10 +203,10 @@ export default function DashboardClient({ stats }: { stats: any }) {
         ))}
       </div>
 
-      {/* MAIN GRID */}
-      <div className="grid gap-4 md:grid-cols-8">
-        {/* CHART */}
-        <Card className="col-span-5 p-6 glass">
+      {/* MAIN CONTENT GRID */}
+      <div className="grid gap-6 md:grid-cols-12">
+        {/* CHART CONTAINER */}
+        <Card className="md:col-span-8 p-8 border-border/50 bg-card/50 backdrop-blur-md">
           <div className="flex items-center justify-between mb-6">
             <div>
               <h3 className="text-lg font-semibold">Revenue Overview</h3>
@@ -158,7 +214,9 @@ export default function DashboardClient({ stats }: { stats: any }) {
                 Monthly revenue from closed deals
               </p>
             </div>
-            <span className="text-sm font-medium text-green-500">+12.5%</span>
+            <span className={`text-sm font-medium ${revenueChange.includes('+') ? 'text-green-500' : 'text-red-500'}`}>
+              {revenueChange}
+            </span>
           </div>
 
           <div className="h-[300px] w-full">

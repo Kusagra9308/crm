@@ -104,6 +104,11 @@ async function migrate() {
         owner VARCHAR(255),
         close_date TIMESTAMP,
         company_id INTEGER REFERENCES companies(id),
+        ai_score FLOAT,
+        email_response_rate FLOAT DEFAULT 0.5,
+        discount_requested FLOAT DEFAULT 0.1,
+        demo_completed BOOLEAN DEFAULT FALSE,
+        champion_identified BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         organization_id INTEGER REFERENCES organizations(id)
       );
