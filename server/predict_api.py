@@ -63,12 +63,10 @@ def predict(deal: DealFeatures):
 
     features = np.array([[
         deal.amount,
-        deal.num_touchpoints,
         deal.email_response_rate,
         deal.discount_requested,
         int(deal.demo_completed),
         int(deal.champion_identified),
-        deal.days_in_stage,
     ]], dtype=float)
 
     score = float(round(model.predict_proba(features)[0][1] * 100, 2))
