@@ -6,6 +6,7 @@ import { signIn, signOut, auth } from "@/auth";
 import { AuthError } from "next-auth";
 import bcrypt from "bcryptjs";
 import { syncTenantDeals } from '@/lib/hubspotClient';
+import { getInsight } from "@/lib/utils";
 
 
 
@@ -554,6 +555,7 @@ export async function deleteTask(id: number) {
 
 export async function getDashboardStats() {
     const session = await auth();
+  
     const orgId = (session?.user as any)?.organization_id;
     if (!orgId)
       return {
@@ -563,6 +565,7 @@ export async function getDashboardStats() {
         pendingTasks: 0,
         recentActivity: [],
         revenueChartData: [],
+        insight,
       };
 
     // Total Revenue (Sum of Closed Won deals)
@@ -653,7 +656,7 @@ AND organization_id = $1
       [orgId],
     );
     const revenueChartData = revenueByMonthResult.rows;
-
+  const insight = getInsight(revenueChartData);
     return {
       totalRevenue,
       activeContacts,

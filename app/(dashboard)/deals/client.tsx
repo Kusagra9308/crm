@@ -66,12 +66,64 @@ function DraggableDealCard({
       className={`bg-background border border-border rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing group relative ${isDragging ? "opacity-50" : ""}`}
     >
       <div className="font-medium text-sm mb-1">{deal.name}</div>
-
+      {/* 
       {deal.ai_score !== null && deal.ai_score !== undefined && (
         <div className="text-xs text-green-500 font-medium">
           AI Score: {Number(deal.ai_score).toFixed(1)}%
         </div>
-      )}
+      )} */}
+
+      {deal.ai_score !== null &&
+        deal.ai_score !== undefined &&
+        (() => {
+          const score = Number(deal.ai_score);
+          const rounded = Math.round(score);
+
+          const getColor = () => {
+            if (score >= 80) return "bg-green-500";
+            if (score >= 50) return "bg-yellow-500";
+            return "bg-red-500";
+          };
+
+          const getTextColor = () => {
+            if (score >= 80) return "text-green-600";
+            if (score >= 50) return "text-yellow-600";
+            return "text-red-500";
+          };
+
+          const getLabel = () => {
+            if (score >= 80) return "High";
+            if (score >= 50) return "Moderate";
+            return "Low";
+          };
+
+          return (
+            <div className="mt-1 space-y-1">
+              {/* top row */}
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-muted-foreground">
+                  Success Probability
+                </span>
+                <span className={`text-[11px] font-semibold ${getTextColor()}`}>
+                  {rounded}%
+                </span>
+              </div>
+
+              {/* progress bar */}
+              <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                <div
+                  className={`h-full ${getColor()} rounded-full transition-all`}
+                  style={{ width: `${rounded}%` }}
+                />
+              </div>
+
+              {/* label */}
+              <div className={`text-[10px] font-medium ${getTextColor()}`}>
+                {getLabel()} probability
+              </div>
+            </div>
+          );
+        })()}
 
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <div className="flex items-center gap-1">
@@ -269,10 +321,10 @@ export default function DealsClient({
             <Upload className="h-4 w-4" />
             Import
           </Button>
-          <Button onClick={handleSyncHubSpot} variant="outline" className="gap-2 border-primary text-primary hover:bg-primary/10" disabled={isLoading}>
+          {/* <Button onClick={handleSyncHubSpot} variant="outline" className="gap-2 border-primary text-primary hover:bg-primary/10" disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             {isLoading ? 'Syncing...' : 'Sync HubSpot'}
-          </Button>
+          </Button> */}
           <Button onClick={() => setIsModalOpen(true)} className="gap-2">
             <Plus className="h-4 w-4" />
             Add Deal
@@ -331,10 +383,7 @@ export default function DealsClient({
         onClose={() => setIsModalOpen(false)}
         title="Add New Deal"
       >
-        <form
-          action={handleSubmit}
-          className="space-y-6"
-        >
+        <form action={handleSubmit} className="space-y-6">
           {/* Header context */}
           <div className="pb-2 border-b border-border/50">
             <h2 className="text-xl font-semibold">Create Deal</h2>
@@ -346,7 +395,9 @@ export default function DealsClient({
           <div className="space-y-4">
             {/* Deal Name */}
             <div className="space-y-2">
-              <Label htmlFor="name" className="text-sm font-semibold">Deal Name *</Label>
+              <Label htmlFor="name" className="text-sm font-semibold">
+                Deal Name *
+              </Label>
               <Input
                 id="name"
                 name="name"
@@ -359,9 +410,13 @@ export default function DealsClient({
             {/* Amount + Date */}
             <div className="grid md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="amount" className="text-sm font-semibold">Amount (₹)</Label>
+                <Label htmlFor="amount" className="text-sm font-semibold">
+                  Amount (₹)
+                </Label>
                 <div className="relative">
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</div>
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                    ₹
+                  </div>
                   <Input
                     id="amount"
                     name="amount"
@@ -372,8 +427,15 @@ export default function DealsClient({
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="close_date" className="text-sm font-semibold">Close Date</Label>
-                <Input id="close_date" name="close_date" type="date" className="h-11" />
+                <Label htmlFor="close_date" className="text-sm font-semibold">
+                  Close Date
+                </Label>
+                <Input
+                  id="close_date"
+                  name="close_date"
+                  type="date"
+                  className="h-11"
+                />
               </div>
             </div>
 
@@ -399,7 +461,9 @@ export default function DealsClient({
 
             {/* Company Selection */}
             <div className="space-y-2">
-              <Label htmlFor="company_id" className="text-sm font-semibold">Company</Label>
+              <Label htmlFor="company_id" className="text-sm font-semibold">
+                Company
+              </Label>
               <select
                 id="company_id"
                 name="company_id"
@@ -424,7 +488,11 @@ export default function DealsClient({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isLoading} className="min-w-[140px] h-11">
+            <Button
+              type="submit"
+              disabled={isLoading}
+              className="min-w-[140px] h-11"
+            >
               {isLoading ? (
                 <span className="flex items-center gap-2">
                   <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
