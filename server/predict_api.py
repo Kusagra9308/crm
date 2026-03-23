@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # ── Load model once at startup ─────────────────────────────────────────────────
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "deal_model.pkl")
+# The model is in the root, go up one level from /server
+MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "deal_model.pkl")
 model = None
 
 @asynccontextmanager

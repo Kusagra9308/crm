@@ -1,4 +1,4 @@
-import { Sidebar } from "@/components/layout/sidebar";
+import Sidebar from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { auth } from "@/auth";
 import { query } from "@/lib/db";

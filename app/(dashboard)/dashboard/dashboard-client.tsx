@@ -103,8 +103,14 @@ export default function DashboardClient({ stats }: { stats: any }) {
         <div>
           <p className="text-sm font-medium">AI Insight</p>
           <p className="text-sm text-muted-foreground">
-            Revenue likely to {insight?.change > 0 ? "increase" : "decrease"} by{" "}
-            {Math.abs(insight?.change)}% next month 🚀
+            {insight && insight.change !== 0 ? (
+              <>
+                Revenue likely to {insight.change > 0 ? "increase" : "decrease"} by{" "}
+                {Math.abs(insight.change)}% next month 🚀
+              </>
+            ) : (
+              "Add more closed deals to generate AI insights."
+            )}
           </p>
         </div>
         <TrendingUp className="h-5 w-5 text-primary" />

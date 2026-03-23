@@ -37,13 +37,15 @@ export function predictNextRevenue(data: { value: number }[]) {
   return Math.round(predicted);
 }
 
-export function getInsight(data) {
+export function getInsight(data: { value: number }[] | any) {
+  if (!data || data.length === 0) return null;
   const predicted = predictNextRevenue(data);
   if (!predicted) return null;
 
-  const last = data[data.length - 1].value;
+  const last = data[data.length - 1]?.value || 0;
 
-  const change = ((predicted - last) / last) * 100;
+  // Avoid division by zero
+  const change = last !== 0 ? ((predicted - last) / last) * 100 : 0;
 
   return {
     predicted,

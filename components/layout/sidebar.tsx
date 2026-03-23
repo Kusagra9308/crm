@@ -75,85 +75,93 @@
 //         </div>
 //     );
 // }
-'use client';
+"use client";
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { LayoutDashboard, Users, Building2, BarChart3, Ticket, Settings, LogOut } from "lucide-react";
+import {
+  LayoutDashboard,
+  Users,
+  Building2,
+  BarChart3,
+  Ticket,
+  Settings,
+  LogOut,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const navigation = [
-    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { name: "Contacts", href: "/contacts", icon: Users },
-    { name: "Companies", href: "/companies", icon: Building2 },
-    { name: "Deals", href: "/deals", icon: BarChart3 },
-    { name: "Tasks", href: "/tasks", icon: Ticket },
-    { name: "Team", href: "/settings/team", icon: Users },
-    { name: "Settings", href: "/settings", icon: Settings },
+  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { name: "Contacts", href: "/contacts", icon: Users },
+  { name: "Companies", href: "/companies", icon: Building2 },
+  { name: "Deals", href: "/deals", icon: BarChart3 },
+  { name: "Tasks", href: "/tasks", icon: Ticket },
+  { name: "Team", href: "/settings/team", icon: Users },
+  { name: "Settings", href: "/settings", icon: Settings },
 ];
 
+export default function Sidebar({ orgName, user }: any) {
+  const pathname = usePathname();
 
-
-    const pathname = usePathname();
-
-    return (
-        <div className="flex h-screen w-64 flex-col border-r border-border/50 bg-background/60 backdrop-blur-xl">
-
-            {/* HEADER */}
-            <div className="flex h-16 items-center px-6 border-b border-border/50">
-                <div className="flex items-center gap-3 font-semibold text-lg">
-                    <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-primary to-orange-500 flex items-center justify-center text-white shadow-sm">
-                        {orgName[0]}
-                    </div>
-                    <span className="truncate">{orgName}</span>
-                </div>
-            </div>
-
-            {/* NAV */}
-            <div className="flex-1 overflow-y-auto py-4">
-                <nav className="space-y-1 px-3">
-                    {navigation.map((item) => {
-                        const isActive = pathname.startsWith(item.href);
-
-                        return (
-                            <Link
-                                key={item.name}
-                                href={item.href}
-                                className={cn(
-                                    "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200",
-                                    isActive
-                                        ? "bg-primary/15 text-primary shadow-sm"
-                                        : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                                )}
-                            >
-                                <item.icon className="h-5 w-5" />
-                                {item.name}
-                            </Link>
-                        );
-                    })}
-                </nav>
-            </div>
-
-            {/* USER */}
-            <div className="p-4 border-t border-border/50">
-                <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-muted/50 transition">
-                    <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
-                        {user?.name?.[0] || "U"}
-                    </div>
-
-                    <div className="flex-1 overflow-hidden">
-                        <p className="text-sm font-medium truncate">{user?.name}</p>
-                        <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
-                    </div>
-
-                    <form action="/api/logout" method="post">
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <LogOut className="h-4 w-4" />
-                        </Button>
-                    </form>
-                </div>
-            </div>
+  return (
+    <div className="flex h-screen w-64 flex-col border-r border-border/50 bg-background/60 backdrop-blur-xl">
+      {/* HEADER */}
+      <div className="flex h-16 items-center px-6 border-b border-border/50">
+        <div className="flex items-center gap-3 font-semibold text-lg">
+          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-primary to-orange-500 flex items-center justify-center text-white shadow-sm">
+            {orgName[0]}
+          </div>
+          <span className="truncate">{orgName}</span>
         </div>
-    );
+      </div>
+
+      {/* NAV */}
+      <div className="flex-1 overflow-y-auto py-4">
+        <nav className="space-y-1 px-3">
+          {navigation.map((item) => {
+            const isActive = pathname.startsWith(item.href);
+
+            return (
+              <Link
+                key={item.name}
+                href={item.href}
+                className={cn(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200",
+                  isActive
+                    ? "bg-primary/15 text-primary shadow-sm"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                )}
+              >
+                <item.icon className="h-5 w-5" />
+                {item.name}
+              </Link>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* USER */}
+      <div className="p-4 border-t border-border/50">
+        <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-muted/50 transition">
+          <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
+            {user?.name?.[0] || "U"}
+          </div>
+
+          <div className="flex-1 overflow-hidden">
+            <p className="text-sm font-medium truncate">{user?.name}</p>
+            <p className="text-xs text-muted-foreground truncate">
+              {user?.email}
+            </p>
+          </div>
+
+          <form action="/api/logout" method="post">
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
 }
