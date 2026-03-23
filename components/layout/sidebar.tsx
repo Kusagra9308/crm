@@ -93,7 +93,8 @@ const navigation = [
     { name: "Settings", href: "/settings", icon: Settings },
 ];
 
-export function Sidebar({ user, orgName }) {
+
+
     const pathname = usePathname();
 
     return (
