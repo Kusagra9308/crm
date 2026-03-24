@@ -726,7 +726,8 @@ AND organization_id = $1
     [orgId],
   );
   const revenueChartData = revenueByMonthResult.rows;
-  insight = getInsight(revenueChartData);
+  // Exclude current month from insight calculation as it is incomplete and skews trends
+  insight = getInsight(revenueChartData.slice(0, -1));
 
   // Calculate real trends
   const currentMonthRevenue = await query(

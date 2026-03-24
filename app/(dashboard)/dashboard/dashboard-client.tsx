@@ -131,8 +131,8 @@ export default function DashboardClient({ stats }: { stats: any }) {
                  <p className="text-slate-400 font-medium tracking-wide uppercase text-[10px]">{heroCard.title}</p>
                  <h1 className="text-4xl md:text-5xl font-black tracking-tighter">{heroCard.value}</h1>
                  <div className="flex items-center gap-2">
-                    <span className={`text-xs font-bold flex items-center gap-1 ${heroCard.trend.color}`}>
-                       {/* Trend value hidden for clean look */}
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${heroCard.trend.bg} ${heroCard.trend.color}`}>
+                       {heroCard.trend.value} vs last month
                     </span>
                  </div>
               </div>
