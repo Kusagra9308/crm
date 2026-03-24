@@ -463,14 +463,15 @@ export async function updateDeal(id: number, formData: FormData) {
   const name = formData.get("name") as string;
   const amount = parseFloat(formData.get("amount") as string) || 0;
   const stage = formData.get("stage") as string;
+  const close_date = formData.get("close_date") as string;
   const demo_completed = formData.get("demo_completed") === "true";
   const champion_identified = formData.get("champion_identified") === "true";
 
   // Update DB
   await query(
-    `UPDATE deals SET name = $1, amount = $2, stage = $3, demo_completed = $4, champion_identified = $5 
-     WHERE id = $6 AND organization_id = $7`,
-    [name, amount, stage, demo_completed, champion_identified, id, orgId]
+    `UPDATE deals SET name = $1, amount = $2, stage = $3, close_date = $4, demo_completed = $5, champion_identified = $6 
+     WHERE id = $7 AND organization_id = $8`,
+    [name, amount, stage, close_date, demo_completed, champion_identified, id, orgId]
   );
 
   // Recalculate AI Score on update
