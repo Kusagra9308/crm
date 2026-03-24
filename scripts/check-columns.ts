@@ -1,4 +1,4 @@
-import { query } from './lib/db';
+import { query } from '../lib/db';
 
 async function check() {
   console.log('--- Checking database columns for "tasks" ---');
