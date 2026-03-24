@@ -32,11 +32,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Deal AI Scoring API", version="1.0.0", lifespan=lifespan)
 
-# Allow requests from Next.js dev server
+# Allow all origins for production convenience (Render)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_methods=["POST", "GET"],
+    allow_origins=["*"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
