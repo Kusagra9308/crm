@@ -6,19 +6,21 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
-import { Plus, Calendar, CheckCircle2, Circle, User, Building2 } from "lucide-react";
+import { Plus, Calendar, CheckCircle2, Circle, User, Building2, DollarSign } from "lucide-react";
 import { createTask, updateTaskStatus } from '@/app/actions';
 import { cn } from "@/lib/utils";
 
-export default function TasksClient({ initialTasks, contacts, companies }: { initialTasks: any[], contacts: any[], companies: any[] }) {
+export default function TasksClient({ initialTasks, contacts, companies, deals }: { initialTasks: any[], contacts: any[], companies: any[], deals: any[] }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
 
     async function handleSubmit(formData: FormData) {
         setIsLoading(true);
         await createTask(formData);
         setIsLoading(false);
         setIsModalOpen(false);
+        setSelectedCompanyId("");
     }
 
     async function toggleStatus(task: any) {
@@ -92,6 +94,12 @@ export default function TasksClient({ initialTasks, contacts, companies }: { ini
                                         {task.company_name}
                                     </div>
                                 )}
+                                {task.deal_name && (
+                                    <div className="flex items-center gap-1 text-primary font-medium shrink-0">
+                                        <DollarSign className="h-3 w-3" />
+                                        <span className="truncate max-w-[120px]">{task.deal_name}</span>
+                                    </div>
+                                )}
                                 <span className={cn(
                                     "px-2 py-0.5 rounded-full text-[10px] font-medium border",
                                     task.priority === 'High' ? "bg-error/10 text-error border-error/20" :
@@ -113,7 +121,7 @@ export default function TasksClient({ initialTasks, contacts, companies }: { ini
 
             <Modal
                 isOpen={isModalOpen}
-                onClose={() => setIsModalOpen(false)}
+                onClose={() => { setIsModalOpen(false); setSelectedCompanyId(""); }}
                 title="Add New Task"
             >
                 <form action={handleSubmit} className="space-y-4">
@@ -137,10 +145,11 @@ export default function TasksClient({ initialTasks, contacts, companies }: { ini
                             <select
                                 id="priority"
                                 name="priority"
+                                defaultValue="Medium"
                                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                             >
                                 <option value="Low">Low</option>
-                                <option value="Medium" selected>Medium</option>
+                                <option value="Medium">Medium</option>
                                 <option value="High">High</option>
                             </select>
                         </div>
@@ -149,9 +158,16 @@ export default function TasksClient({ initialTasks, contacts, companies }: { ini
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label htmlFor="contact_id">Related Contact</Label>
-                            <select
+                             <select
                                 id="contact_id"
                                 name="contact_id"
+                                onChange={(e) => {
+                                    const contactId = e.target.value;
+                                    const contact = contacts.find(c => c.id.toString() === contactId);
+                                    if (contact?.company_id) {
+                                        setSelectedCompanyId(contact.company_id.toString());
+                                    }
+                                }}
                                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                             >
                                 <option value="">Select a contact...</option>
@@ -167,6 +183,8 @@ export default function TasksClient({ initialTasks, contacts, companies }: { ini
                             <select
                                 id="company_id"
                                 name="company_id"
+                                value={selectedCompanyId}
+                                onChange={(e) => setSelectedCompanyId(e.target.value)}
                                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                             >
                                 <option value="">Select a company...</option>
@@ -179,8 +197,27 @@ export default function TasksClient({ initialTasks, contacts, companies }: { ini
                         </div>
                     </div>
 
+
+                    <div className="space-y-2">
+                        <Label htmlFor="deal_id">Related Deal</Label>
+                        <select
+                            id="deal_id"
+                            name="deal_id"
+                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        >
+                            <option value="">Select a deal...</option>
+                            {deals
+                                .filter(deal => !selectedCompanyId || deal.company_id === parseInt(selectedCompanyId))
+                                .map((deal) => (
+                                    <option key={deal.id} value={deal.id}>
+                                        {deal.name} {deal.company_name ? `(${deal.company_name})` : ''} - ${deal.amount}
+                                    </option>
+                                ))}
+                        </select>
+                    </div>
+
                     <div className="flex justify-end gap-3 pt-4">
-                        <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
+                        <Button type="button" variant="outline" onClick={() => { setIsModalOpen(false); setSelectedCompanyId(""); }}>
                             Cancel
                         </Button>
                         <Button type="submit" disabled={isLoading}>

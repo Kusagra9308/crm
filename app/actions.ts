@@ -364,6 +364,51 @@ export async function getDeals() {
   return deals;
 }
 
+// --- Internal AI Helper ---
+async function recalculateAiScore(dealId: number) {
+  try {
+    const dealRes = await query("SELECT * FROM deals WHERE id = $1", [dealId]);
+    if (dealRes.rows.length === 0) return;
+    const d = dealRes.rows[0];
+
+    // Calculate Real Age and Urgency
+    const deal_age = Math.floor((new Date().getTime() - new Date(d.created_at).getTime()) / (1000 * 60 * 60 * 24));
+    const days_to_close = d.close_date ? Math.floor((new Date(d.close_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)) : 30;
+
+    // Dynamic Feature: Memory Density (Task Count)
+    const ntRes = await query("SELECT COUNT(*) as count FROM tasks WHERE deal_id = $1", [dealId]);
+    const note_count = parseInt(ntRes.rows[0].count);
+
+    const pythonUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+    const predictRes = await fetch(`${pythonUrl}/predict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount: d.amount,
+        stage: d.stage,
+        note_count,
+        deal_age,
+        demo_completed: d.demo_completed,
+        champion_identified: d.champion_identified,
+        days_to_close
+      }),
+    });
+
+    if (predictRes.ok) {
+      const { ai_score } = await predictRes.json();
+      if (ai_score !== null && ai_score !== undefined) {
+        await query(`UPDATE deals SET ai_score = $1 WHERE id = $2`, [
+          ai_score,
+          dealId,
+        ]);
+        console.log(`[recalculateAiScore] Updated Deal ${dealId} -> ${ai_score}%`);
+      }
+    }
+  } catch (err) {
+    console.warn("[recalculateAiScore] Failed:", err);
+  }
+}
+
 export async function createDeal(formData: FormData) {
   const session = await auth();
   const orgId = (session?.user as any)?.organization_id;
@@ -379,66 +424,57 @@ export async function createDeal(formData: FormData) {
     ? parseInt(formData.get("company_id") as string)
     : null;
 
-  const email_response_rate = parseFloat(formData.get("email_response_rate") as string) || 0.5;
-  const discount_requested = parseFloat(formData.get("discount_requested") as string) || 0;
   const demo_completed = formData.get("demo_completed") === "true";
   const champion_identified = formData.get("champion_identified") === "true";
 
-  // Insert deal first
   const dealResult = await query(
     `INSERT INTO deals (
       name, amount, stage, close_date, company_id, organization_id, 
-      email_response_rate, discount_requested, demo_completed, champion_identified
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      demo_completed, champion_identified
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
     [
-        name, amount, stage, close_date, company_id, orgId, 
-        email_response_rate, discount_requested, demo_completed, champion_identified
+      name, amount, stage, close_date, company_id, orgId,
+      demo_completed, champion_identified
     ],
   );
 
   const dealId = dealResult.rows[0]?.id;
 
   if (dealId) {
-    // Record stage history
     await query(
       `INSERT INTO deal_stage_history (deal_id, stage)
        VALUES ($1, $2)`,
       [dealId, stage],
     );
 
-    // Call Python ML API to get AI score and save it back
-    try {
-      const pythonUrl = process.env.PYTHON_API_URL || "https://crm-iogr.onrender.com";
-      const predictRes = await fetch(`${pythonUrl}/predict`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount,
-          num_touchpoints: 5,
-          email_response_rate: 0.5,
-          discount_requested: 0.1,
-          demo_completed: false,
-          champion_identified: false,
-          days_in_stage: 0,
-        }),
-      });
-
-      if (predictRes.ok) {
-        const { ai_score } = await predictRes.json();
-        if (ai_score !== null && ai_score !== undefined) {
-          await query(`UPDATE deals SET ai_score = $1 WHERE id = $2`, [
-            ai_score,
-            dealId,
-          ]);
-        }
-      } else {
-        console.error("[createDeal] API error:", await predictRes.text());
-      }
-    } catch (err) {
-      console.warn("[createDeal] Could not get AI score:", err);
-    }
+    // Initial Score Calculation
+    await recalculateAiScore(dealId);
   }
+
+  revalidatePath("/deals");
+}
+
+export async function updateDeal(id: number, formData: FormData) {
+  const session = await auth();
+  const orgId = (session?.user as any)?.organization_id;
+  if (!orgId) throw new Error("Unauthorized");
+
+  const name = formData.get("name") as string;
+  const amount = parseFloat(formData.get("amount") as string) || 0;
+  const stage = formData.get("stage") as string;
+  const demo_completed = formData.get("demo_completed") === "true";
+  const champion_identified = formData.get("champion_identified") === "true";
+
+  // Update DB
+  await query(
+    `UPDATE deals SET name = $1, amount = $2, stage = $3, demo_completed = $4, champion_identified = $5 
+     WHERE id = $6 AND organization_id = $7`,
+    [name, amount, stage, demo_completed, champion_identified, id, orgId]
+  );
+
+  // Recalculate AI Score on update
+  await recalculateAiScore(id);
 
   revalidatePath("/deals");
 }
@@ -471,6 +507,8 @@ export async function updateDealStage(id: number, stage: string) {
        VALUES ($1, $2)`,
       [id, stage],
     );
+    // Stage changed -> recalculate AI score
+    await recalculateAiScore(id);
   }
 
   revalidatePath("/deals");
@@ -499,10 +537,12 @@ export async function getTasks() {
     `
     SELECT tasks.*, 
            contacts.first_name as contact_first_name, contacts.last_name as contact_last_name,
-           companies.name as company_name
+           companies.name as company_name,
+           deals.name as deal_name
     FROM tasks 
     LEFT JOIN contacts ON tasks.contact_id = contacts.id
     LEFT JOIN companies ON tasks.company_id = companies.id
+    LEFT JOIN deals ON tasks.deal_id = deals.id
     WHERE tasks.organization_id = $1
     ORDER BY tasks.due_date ASC
   `,
@@ -520,20 +560,18 @@ export async function createTask(formData: FormData) {
   const description = formData.get("description") as string;
   const due_date = formData.get("due_date") as string;
   const priority = formData.get("priority") as string;
-  const contact_id = formData.get("contact_id")
-    ? parseInt(formData.get("contact_id") as string)
-    : null;
-  const company_id = formData.get("company_id")
-    ? parseInt(formData.get("company_id") as string)
-    : null;
+  const contact_id = formData.get("contact_id") ? parseInt(formData.get("contact_id") as string) : null;
+  const company_id = formData.get("company_id") ? parseInt(formData.get("company_id") as string) : null;
+  const deal_id = formData.get("deal_id") ? parseInt(formData.get("deal_id") as string) : null;
 
   await query(
-    `INSERT INTO tasks (title, description, due_date, priority, contact_id, company_id, organization_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [title, description, due_date, priority, contact_id, company_id, orgId],
+    `INSERT INTO tasks (title, description, due_date, priority, contact_id, company_id, deal_id, organization_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [title, description, due_date, priority, contact_id, company_id, deal_id, orgId],
   );
 
   revalidatePath("/tasks");
+  if (deal_id) await recalculateAiScore(deal_id);
 }
 
 export async function updateTaskStatus(id: number, status: string) {
@@ -541,11 +579,32 @@ export async function updateTaskStatus(id: number, status: string) {
   const orgId = (session?.user as any)?.organization_id;
   if (!orgId) throw new Error("Unauthorized");
 
+  // Get task info before updating
+  const taskRes = await query("SELECT title, deal_id FROM tasks WHERE id = $1", [id]);
+  const task = taskRes.rows[0];
+
   await query(
     "UPDATE tasks SET status = $1 WHERE id = $2 AND organization_id = $3",
     [status, id, orgId],
   );
+
+  // Automation: If task title contains 'demo' and marked as Completed, update deal flag
+  if (task && task.deal_id && status === 'Completed') {
+    const title = task.title.toLowerCase();
+    if (title.includes("demo")) {
+      await query("UPDATE deals SET demo_completed = TRUE WHERE id = $1", [task.deal_id]);
+      console.log(`[Task-Automation] Demo completed for Deal ${task.deal_id}`);
+    } else if (title.includes("champion") || title.includes("decision maker")) {
+      await query("UPDATE deals SET champion_identified = TRUE WHERE id = $1", [task.deal_id]);
+      console.log(`[Task-Automation] Champion identified for Deal ${task.deal_id}`);
+    }
+    
+    // Always recalculate score after a status change (might change momentum)
+    await recalculateAiScore(task.deal_id);
+  }
+
   revalidatePath("/tasks");
+  revalidatePath("/deals");
 }
 
 export async function deleteTask(id: number) {
@@ -553,11 +612,15 @@ export async function deleteTask(id: number) {
   const orgId = (session?.user as any)?.organization_id;
   if (!orgId) throw new Error("Unauthorized");
 
+  const taskRes = await query("SELECT deal_id FROM tasks WHERE id = $1", [id]);
+  const deal_id = taskRes.rows[0]?.deal_id;
+
   await query("DELETE FROM tasks WHERE id = $1 AND organization_id = $2", [
     id,
     orgId,
   ]);
   revalidatePath("/tasks");
+  if (deal_id) await recalculateAiScore(deal_id);
 }
 
 // --- Dashboard Actions ---
@@ -625,19 +688,7 @@ AND organization_id = $1
     [orgId],
   );
 
-  let predictedRevenue = 0;
-
-  for (const deal of openDeals.rows) {
-    let probability = 0.5;
-
-    if (deal.stage === "Contract Sent") probability = 0.8;
-    if (deal.stage === "Decision Maker Bought-In") probability = 0.7;
-    if (deal.stage === "Presentation Scheduled") probability = 0.6;
-    if (deal.stage === "Qualified to Buy") probability = 0.5;
-    if (deal.stage === "Appointment Scheduled") probability = 0.4;
-
-    predictedRevenue += Number(deal.amount ?? 0) * probability;
-  }
+  const predictedRevenue = weightedRevenue; // Now using the database-stored weighted revenue (amount * ai_score / 100)
 
   console.log("Predicted Revenue:", predictedRevenue);
 

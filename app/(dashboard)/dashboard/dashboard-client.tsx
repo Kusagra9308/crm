@@ -100,102 +100,94 @@ export default function DashboardClient({ stats }: { stats: any }) {
       icon: TrendingUp,
     },
   ];
-
   return (
-    <div className="space-y-8 pb-10">
+    <div className="space-y-5 pb-6">
       {/* HEADER */}
       <div className="flex items-end justify-between">
         <div>
-          <h2 className="text-4xl font-extrabold tracking-tight">Overview</h2>
-          <p className="text-muted-foreground text-lg">
-            A real-time snapshot of your organization's performance.
+          <h2 className="text-3xl font-extrabold tracking-tight">Overview</h2>
+          <p className="text-muted-foreground text-sm">
+            Real-time performance metrics.
           </p>
         </div>
         <div className="text-right hidden md:block">
-           <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest">Global Status</p>
-           <div className="flex items-center gap-2 text-emerald-500 font-bold">
-              <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+           <div className="flex items-center gap-2 text-emerald-500 text-xs font-bold">
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
               Live Data Active
            </div>
         </div>
       </div>
 
-      {/* HERO SECTION */}
+      {/* HERO SECTION WITH AI INTEGRATED */}
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative overflow-hidden group"
+        className="relative overflow-hidden group shadow-xl rounded-2xl"
       >
-        <Card className="p-8 border-none bg-gradient-to-br from-slate-900 to-slate-800 text-white shadow-2xl relative z-10">
-           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-              <div className="space-y-2">
-                 <p className="text-slate-400 font-medium tracking-wide uppercase text-xs">{heroCard.title}</p>
-                 <h1 className="text-5xl md:text-6xl font-black">{heroCard.value}</h1>
-                 <div className="flex items-center gap-2 mt-2">
-                    <span className={`text-sm font-bold flex items-center gap-1 ${heroCard.trend.color}`}>
+        <Card className="p-6 border-none bg-gradient-to-br from-slate-900 to-slate-800 text-white relative z-10">
+           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+              <div className="space-y-1">
+                 <p className="text-slate-400 font-medium tracking-wide uppercase text-[10px]">{heroCard.title}</p>
+                 <h1 className="text-4xl md:text-5xl font-black tracking-tighter">{heroCard.value}</h1>
+                 <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold flex items-center gap-1 ${heroCard.trend.color}`}>
                        {heroCard.trend.value} vs last month
                     </span>
-                    <span className="text-slate-500 text-sm">• Monthly Performance</span>
                  </div>
               </div>
-              <div className="h-20 w-20 rounded-2xl bg-white/5 backdrop-blur-md border border-white/10 flex items-center justify-center">
-                 <heroCard.icon className="h-10 w-10 text-primary" />
+              <div className="h-14 w-14 rounded-xl bg-white/5 backdrop-blur-md border border-white/10 flex items-center justify-center">
+                 <heroCard.icon className="h-7 w-7 text-primary" />
               </div>
+           </div>
+
+           {/* INTEGRATED AI INSIGHT STRIP */}
+           <div className="mt-2 pt-4 border-t border-white/5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                 <div className="h-8 w-8 rounded-lg bg-primary/20 flex items-center justify-center">
+                    <TrendingUp className="h-4 w-4 text-primary" />
+                 </div>
+                 <p className="text-xs text-slate-300">
+                    {insight && insight.change !== 0 ? (
+                      <>
+                        AI Prediction: Revenue likely to <span className="text-white font-bold">{insight.change > 0 ? "increase" : "decrease"} by {Math.abs(insight.change)}%</span> next month
+                      </>
+                    ) : (
+                      "AI requires more data for predictions."
+                    )}
+                 </p>
+              </div>
+              <Button variant="ghost" size="sm" className="h-8 text-[10px] text-slate-400 hover:text-white hover:bg-white/5 uppercase font-bold tracking-widest">
+                 View Forecast
+              </Button>
            </div>
 
            {/* Decorative background flare */}
            <div className="absolute -top-24 -right-24 h-64 w-64 bg-primary/20 rounded-full blur-[80px] pointer-events-none" />
-           <div className="absolute -bottom-24 -left-24 h-64 w-64 bg-orange-600/10 rounded-full blur-[80px] pointer-events-none" />
         </Card>
       </motion.div>
 
-      {/* AI INSIGHT STRIP */}
-      <div className="rounded-2xl border border-border/40 bg-muted/30 p-4 flex items-center justify-between backdrop-blur-sm">
-        <div className="flex items-center gap-4">
-          <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
-             <TrendingUp className="h-5 w-5 text-primary" />
-          </div>
-          <div>
-            <p className="text-sm font-bold tracking-tight">AI REVENUE CO-PILOT</p>
-            <p className="text-sm text-muted-foreground">
-              {insight && insight.change !== 0 ? (
-                <>
-                  Revenue likely to {insight.change > 0 ? "increase" : "decrease"} by{" "}
-                  <span className="font-bold text-foreground">{Math.abs(insight.change)}%</span> next month 🚀
-                </>
-              ) : (
-                "Add more closed deals to generate AI insights."
-              )}
-            </p>
-          </div>
-        </div>
-        <Button variant="outline" size="sm" className="hidden sm:flex rounded-lg border-primary/20 hover:bg-primary/5">
-           View Predictions
-        </Button>
-      </div>
-
       {/* SECONDARY STATS GRID */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {secondaryCards.map((card, index) => (
           <motion.div
             key={card.title}
-            initial={{ opacity: 0, y: 15 }}
+            initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 + index * 0.05 }}
           >
-            <Card className="p-6 h-full hover:shadow-xl transition-all border-border/50 bg-card/50 hover:bg-card">
-              <div className="flex flex-col h-full justify-between gap-4">
+            <Card className="p-4 h-full border-border/40 bg-card/40 hover:bg-card transition-colors">
+              <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
-                   <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center">
-                      <card.icon className="h-5 w-5 text-muted-foreground" />
+                   <div className="h-8 w-8 rounded-lg bg-muted flex items-center justify-center">
+                      <card.icon className="h-4 w-4 text-muted-foreground" />
                    </div>
-                   <span className={`text-xs font-bold px-2 py-1 rounded-md bg-muted ${card.trend.color}`}>
+                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded bg-muted ${card.trend.color}`}>
                       {card.trend.value}
                    </span>
                 </div>
-                <div className="space-y-1">
-                   <p className="text-sm text-muted-foreground font-medium">{card.title}</p>
-                   <p className="text-2xl font-bold tracking-tight">{card.value}</p>
+                <div className="space-y-0.5">
+                   <p className="text-[11px] text-muted-foreground font-semibold uppercase tracking-tight">{card.title}</p>
+                   <p className="text-xl font-bold tracking-tight">{card.value}</p>
                 </div>
               </div>
             </Card>
@@ -204,9 +196,9 @@ export default function DashboardClient({ stats }: { stats: any }) {
       </div>
 
       {/* MAIN CONTENT GRID */}
-      <div className="grid gap-6 md:grid-cols-12">
+      <div className="grid gap-5 md:grid-cols-12">
         {/* CHART CONTAINER */}
-        <Card className="md:col-span-8 p-8 border-border/50 bg-card/50 backdrop-blur-md">
+        <Card className="md:col-span-9 p-6 border-border/40 bg-card/30">
           <div className="flex items-center justify-between mb-6">
             <div>
               <h3 className="text-lg font-semibold">Revenue Overview</h3>

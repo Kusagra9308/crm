@@ -13,13 +13,21 @@ import {
   Search,
   Upload,
   RefreshCw,
+  X,
+  Target,
+  Users,
+  CheckCircle2,
 } from "lucide-react";
-import { createDeal, updateDealStage, syncFromHubSpot } from "@/app/actions";
+import { createDeal, updateDealStage, syncFromHubSpot, updateDeal, deleteDeal } from "@/app/actions";
+import { CrmStageTracker } from "@/components/hubspot/crm/CrmStageTracker";
 import {
   DndContext,
   DragOverlay,
   useDraggable,
   useDroppable,
+  PointerSensor,
+  useSensor,
+  useSensors,
   DragEndEvent,
   DragStartEvent,
 } from "@dnd-kit/core";
@@ -130,12 +138,17 @@ function DraggableDealCard({
           <IndianRupee className="h-3 w-3" />
           {Number(deal.amount).toLocaleString("en-IN")}
         </div>
-        {deal.company_name && (
-          <div className="flex items-center gap-1" title={deal.company_name}>
-            <Building2 className="h-3 w-3" />
-            <span className="truncate max-w-[80px]">{deal.company_name}</span>
-          </div>
-        )}
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          className="h-7 px-2 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity bg-primary/10 text-primary hover:bg-primary/20"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClick();
+          }}
+        >
+          Manage
+        </Button>
       </div>
       {deal.close_date && (
         <div className="flex items-center gap-1 text-xs text-muted-foreground mt-2">
@@ -190,7 +203,7 @@ function DroppableColumn({
   );
 }
 
-import { CrmStageTracker } from "@/components/hubspot/crm/CrmStageTracker";
+
 
 export default function DealsClient({
   initialDeals,
@@ -207,6 +220,18 @@ export default function DealsClient({
   const [activeDragDeal, setActiveDragDeal] = useState<any>(null);
   const [mounted, setMounted] = useState(false);
   const [selectedStage, setSelectedStage] = useState(STAGES[0]);
+  const [demoCompleted, setDemoCompleted] = useState(false);
+  const [championIdentified, setChampionIdentified] = useState(false);
+  const [selectedDeal, setSelectedDeal] = useState<any>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    })
+  );
 
   useMemo(() => {
     setMounted(true);
@@ -227,12 +252,18 @@ export default function DealsClient({
   }, [deals, searchQuery]);
 
   async function handleSubmit(formData: FormData) {
-    setIsLoading(true);
+    console.log("Creating deal...");
     await createDeal(formData);
     setIsLoading(false);
     setIsModalOpen(false);
     window.location.reload();
   }
+
+  useEffect(() => {
+    if (isSidebarOpen) {
+      console.log("SIDEBAR OPENED for deal:", selectedDeal?.id);
+    }
+  }, [isSidebarOpen, selectedDeal]);
 
   async function handleSyncHubSpot() {
     setIsLoading(true);
@@ -244,6 +275,24 @@ export default function DealsClient({
       console.error(e);
       setIsLoading(false);
     }
+  }
+
+  async function handleUpdateDeal(formData: FormData) {
+    if (!selectedDeal) return;
+    setIsLoading(true);
+    await updateDeal(selectedDeal.id, formData);
+    setIsLoading(false);
+    setIsSidebarOpen(false);
+    window.location.reload();
+  }
+
+  async function handleDeleteDeal(id: number) {
+    if (!confirm("Are you sure you want to delete this deal?")) return;
+    setIsLoading(true);
+    await deleteDeal(id);
+    setIsLoading(false);
+    setIsSidebarOpen(false);
+    window.location.reload();
   }
 
   async function handleDragEnd(event: DragEndEvent) {
@@ -261,6 +310,12 @@ export default function DealsClient({
         deals.map((d) => (d.id === dealId ? { ...d, stage: newStage } : d)),
       );
       await updateDealStage(dealId, newStage);
+
+      // Trigger: If moved to Presentation Scheduled, open sidebar as a prompt
+      if (newStage === "Presentation Scheduled") {
+        setSelectedDeal({ ...deal, stage: newStage });
+        setIsSidebarOpen(true);
+      }
     }
   }
 
@@ -332,7 +387,7 @@ export default function DealsClient({
         </div>
       </div>
 
-      <DndContext onDragEnd={handleDragEnd} onDragStart={handleDragStart}>
+      <DndContext sensors={sensors} onDragEnd={handleDragEnd} onDragStart={handleDragStart}>
         <div className="flex-1 overflow-x-auto pb-4">
           <div className="flex gap-4 h-full min-w-[1200px]">
             {STAGES.map((stage) => {
@@ -349,7 +404,8 @@ export default function DealsClient({
                   deals={stageDeals}
                   totalAmount={totalAmount}
                   onDealClick={(deal) => {
-                    // Handle edit if needed
+                    setSelectedDeal(deal);
+                    setIsSidebarOpen(true);
                   }}
                 />
               );
@@ -477,6 +533,38 @@ export default function DealsClient({
                 ))}
               </select>
             </div>
+
+            {/* AI Signal Toggles */}
+            <div className="pt-2">
+              <Label className="text-sm font-semibold">AI Validation Signals</Label>
+              <p className="text-[10px] text-muted-foreground mb-3">
+                Toggle these to improve AI win-probability accuracy.
+              </p>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <label className="flex items-center gap-3 p-3 border border-border/50 rounded-lg cursor-pointer hover:bg-muted/30 transition-colors">
+                  <input 
+                    type="checkbox" 
+                    checked={demoCompleted} 
+                    onChange={(e) => setDemoCompleted(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                  />
+                  <input type="hidden" name="demo_completed" value={demoCompleted ? "true" : "false"} />
+                  <span className="text-sm font-medium">Product Demo</span>
+                </label>
+
+                <label className="flex items-center gap-3 p-3 border border-border/50 rounded-lg cursor-pointer hover:bg-muted/30 transition-colors">
+                  <input 
+                    type="checkbox" 
+                    checked={championIdentified} 
+                    onChange={(e) => setChampionIdentified(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                  />
+                  <input type="hidden" name="champion_identified" value={championIdentified ? "true" : "false"} />
+                  <span className="text-sm font-medium">Champion Identified</span>
+                </label>
+              </div>
+            </div>
           </div>
 
           {/* Actions */}
@@ -525,6 +613,143 @@ export default function DealsClient({
           )}
         </div>
       </Modal>
+
+      {/* Deal Detail Sidebar - Portaled for best reliability */}
+      {mounted && typeof window !== "undefined" && isSidebarOpen && selectedDeal && createPortal(
+        <div className="fixed inset-0 z-[100] overflow-hidden">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)} />
+          <div className="absolute inset-y-0 right-0 max-w-lg w-full bg-background shadow-2xl flex flex-col transform transition-transform animate-in slide-in-from-right duration-300">
+            {/* Sidebar Header */}
+            <div className="flex items-center justify-between p-6 border-b border-border/60">
+              <div>
+                <h3 className="text-xl font-bold font-heading">{selectedDeal.name}</h3>
+                <p className="text-sm text-muted-foreground flex items-center gap-1">
+                  <Building2 className="h-3 w-3" />
+                  {selectedDeal.company_name || 'Individual Deal'}
+                </p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setIsSidebarOpen(false)}>
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+
+            {/* Sidebar Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-8">
+              {/* AI Score Widget */}
+              {selectedDeal.ai_score !== undefined && (
+                <div className="bg-primary/5 border border-primary/20 rounded-2xl p-6 relative overflow-hidden">
+                  <div className="relative z-10">
+                    <div className="flex items-center justify-between mb-2">
+                       <span className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+                         <Target className="h-4 w-4 text-primary" />
+                         Success Probability
+                       </span>
+                       <span className="text-2xl font-black text-primary">
+                         {Math.round(selectedDeal.ai_score)}%
+                       </span>
+                    </div>
+                    <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-primary transition-all duration-700"
+                        style={{ width: `${selectedDeal.ai_score}%` }}
+                      />
+                    </div>
+                    <p className="mt-4 text-[11px] text-muted-foreground italic leading-relaxed">
+                      "According to our ML model, this deal is {Math.round(selectedDeal.ai_score) > 50 ? 'trending towards a close' : 'at risk and needs more activity'}."
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Edit Form */}
+              <form 
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.currentTarget);
+                  // Ensure checkboxes send false if unchecked
+                  if (!fd.has("demo_completed")) fd.append("demo_completed", "false");
+                  if (!fd.has("champion_identified")) fd.append("champion_identified", "false");
+                  await handleUpdateDeal(fd);
+                }} 
+                className="space-y-6"
+              >
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Amount (₹)</Label>
+                    <Input name="name" defaultValue={selectedDeal.name} className="hidden" />
+                    <div className="relative">
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</div>
+                      <Input name="amount" type="number" defaultValue={selectedDeal.amount} className="pl-7 h-11" />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Close Date</Label>
+                    <Input name="close_date" type="date" defaultValue={selectedDeal.close_date ? new Date(selectedDeal.close_date).toISOString().split('T')[0] : ''} className="h-11" />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                   <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Current Stage</Label>
+                   <select 
+                    name="stage" 
+                    defaultValue={selectedDeal.stage}
+                    className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary outline-none"
+                   >
+                     {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+                   </select>
+                </div>
+
+                {/* Milestone Toggles */}
+                <div className="space-y-3 pt-4 border-t border-border/50">
+                   <h4 className="text-sm font-bold flex items-center gap-2">
+                     <CheckCircle2 className="h-4 w-4 text-primary" />
+                     Execution Milestones
+                   </h4>
+                   <div className="grid grid-cols-1 gap-2">
+                     <label className="flex items-center justify-between p-4 bg-muted/30 border border-border/50 rounded-xl cursor-pointer hover:bg-muted/50 transition-colors">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold">Product Demo</span>
+                          <span className="text-[10px] text-muted-foreground">Validation of solution value</span>
+                        </div>
+                        <input 
+                          name="demo_completed"
+                          type="checkbox" 
+                          defaultChecked={selectedDeal.demo_completed}
+                          className="h-5 w-5 accent-primary cursor-pointer"
+                          value="true"
+                        />
+                     </label>
+
+                     <label className="flex items-center justify-between p-4 bg-muted/30 border border-border/50 rounded-xl cursor-pointer hover:bg-muted/50 transition-colors">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold">Champion Identified</span>
+                          <span className="text-[10px] text-muted-foreground">Stakeholder buy-in secured</span>
+                        </div>
+                        <input 
+                          name="champion_identified"
+                          type="checkbox" 
+                          defaultChecked={selectedDeal.champion_identified}
+                          className="h-5 w-5 accent-primary cursor-pointer"
+                          value="true"
+                        />
+                     </label>
+                   </div>
+                </div>
+
+                <div className="flex gap-3 pt-6">
+                  <Button type="submit" className="flex-1 h-12 text-sm font-bold shadow-lg shadow-primary/20" disabled={isLoading}>
+                    {isLoading ? "Saving..." : "Update Deal & AI Score"}
+                  </Button>
+                  <Button type="button" variant="destructive" size="icon" className="h-12 w-12 shrink-0 border border-red-200" onClick={() => handleDeleteDeal(selectedDeal.id)}>
+                    <X className="h-5 w-5" />
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
