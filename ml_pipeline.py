@@ -10,7 +10,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
+from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.calibration import CalibratedClassifierCV
+import matplotlib.pyplot as plt
 import joblib
 
 # ── Setup ─────────────────────────────────────────────────────────────
@@ -21,200 +23,281 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 def get_connection():
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL not found in environment!")
-    # Use require instead of verify-full to avoid local CA certificate issues
     url = DATABASE_URL.replace("sslmode=verify-full", "sslmode=require")
-    print(f"Connecting to: {url.split('@')[-1].split('/')[0]}") # Log host only for safety
+    print(f"Connecting to: {url.split('@')[-1].split('/')[0]}")
     return psycopg2.connect(url)
 
 np.random.seed(42)
 random.seed(42)
 
-# ── Step 1: Ensure Schema ─────────────────────────────────────────────
+# ── Single source of truth for stages ─────────────────────────────────
+# FIX: one map used everywhere — training, scoring, open deals
+STAGE_MAP = {
+    "Appointment Scheduled":    1,
+    "Qualified to Buy":         2,
+    "Presentation Scheduled":   3,
+    "Decision Maker Bought-In": 4,
+    "Contract Sent":            5,
+    "Closed Won":               3,  # explicit — never falls back to 1
+    "Closed Lost":              3,  # explicit — never falls back to 1
+}
+
+OPEN_STAGES = [
+    "Appointment Scheduled",
+    "Qualified to Buy",
+    "Presentation Scheduled",
+    "Decision Maker Bought-In",
+    "Contract Sent",
+]
+
+# FIX: stage gating — activity means more at higher stages
+# A call at Stage 5 is worth more than a cold call at Stage 1
+STAGE_WEIGHT = {
+    1: 0.00,   # Appointment — no inherent score boost
+    2: 0.06,   # Qualified
+    3: 0.14,   # Presentation
+    4: 0.24,   # Decision Maker
+    5: 0.38,   # Contract Sent — nearly there
+}
+
+STAGE_ACTIVITY_MULT = {
+    1: 0.5,    # activity counts half at Stage 1
+    2: 0.7,
+    3: 1.0,    # Stage 3 is the neutral baseline
+    4: 1.3,
+    5: 1.6,    # activity counts 60% more at Stage 5
+}
+
+def noisy_bool(p):
+    return random.random() < p
+
+def get_realistic_stage(nc, demo, champion, age):
+    # Start from lowest
+    stage = 1
+
+    # Stage 2 → requires basic activity
+    if nc >= 2:
+        stage = 2
+
+    # Stage 3 → requires demo (HARD GATE)
+    if demo:
+        stage = 3
+
+    # Stage 4 → requires champion (HARD GATE)
+    if champion:
+        stage = 4
+
+    # Stage 5 → requires everything strong
+    if demo and champion and nc >= 8:
+        stage = 5
+
+    # Regression logic (realistic behavior)
+    if age > 60 and nc < 3:
+        stage = min(stage, 2)
+
+    # Add slight randomness
+    if random.random() < 0.1:
+        stage = max(1, min(5, stage + random.choice([-1, 1])))
+
+    return int(stage)
+
+# ── Step 1: Schema ─────────────────────────────────────────────────────
 conn = get_connection()
-cur = conn.cursor()
+cur  = conn.cursor()
 conn.autocommit = True
 cur.execute("ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_stage_num INTEGER")
+cur.execute("ALTER TABLE deals ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN DEFAULT FALSE")
 conn.autocommit = False
 
 cur.execute("SELECT COUNT(*) FROM deals WHERE stage IN ('Closed Won', 'Closed Lost')")
 historical_count = cur.fetchone()[0]
-print(f"Current historical deal database size: {historical_count}")
+print(f"Historical deals in DB: {historical_count}")
 
-# ── Step 2: Generate booster synthetic data (FORCE REBUILD) ──────────
-if True: # Force rebuild once for the new milestone correlation
-    # Clear once to fix the task-less deals
-    cur.execute("DELETE FROM tasks; DELETE FROM deals;")
-    conn.commit()
-    print(f"Force rebuild: Cleared deals to fix task density patterns.")
-    print(f"Database reflects a new organization (<100 deals). Generating booster data...")
-    print("Fetching unique organization IDs...")
+# ── Step 2: Hybrid Generation ───────────────────────────────────────
+MINIMUM_DEALS = 500
+needed = max(0, MINIMUM_DEALS - historical_count)
+
+if needed > 0:
+    print(f"Hybrid Mode: Detected {historical_count} deals. Generating {needed} synthetic deals to reach target of {MINIMUM_DEALS}.")
+
     cur.execute("SELECT DISTINCT organization_id FROM users")
     org_ids = [r[0] for r in cur.fetchall()]
     if not org_ids:
-        org_ids = [1] # Fallback
-    print(f"Found organizations: {org_ids}")
-
+        org_ids = [1]
+    # Add a fresh new organization specifically for the ideal-weight demo
+    if 3 not in org_ids:
+        org_ids.append(3)
+    
     companies = [1, 2, 3]
-    owners = ["Alice Freeman", "Bob Smith", "Charlie Brown"]
+    owners    = ["Alice Freeman", "Bob Smith", "Charlie Brown"]
+    rows      = []
 
-    stages_open = [
-        "Appointment Scheduled",
-        "Qualified to Buy",
-        "Presentation Scheduled",
-        "Decision Maker Bought-In",
-        "Contract Sent"
-    ]
-
-    rows = []
-
-    def noisy_bool(p):
-        return random.random() < p
+    # Distribute 'needed' deals across organizations
+    deals_per_org = max(1, needed // len(org_ids))
 
     for org_id in org_ids:
-        print(f"Generating Logistic-Smooth data for Org {org_id}...")
-        # V6: High-Resolution Training (1000 deals per org to eliminate noise/inversions)
-        for i in range(100):
-            # 1. Activity Distribution (0 to 15 tasks)
-            nc = random.randint(0, 15)
-            
-            # 2. Milestones
-            demo = noisy_bool(0.35)
+        print(f"Adding {deals_per_org} hybrid deals for Org {org_id}...")
+        for i in range(deals_per_org):
+            nc       = random.randint(0, 15)
+            demo     = noisy_bool(0.35)
             champion = noisy_bool(0.30)
-            lsn = random.randint(1, 4) # Lower stage
-            amt = random.randint(5000, 200000) # Wide range
+            age      = random.randint(5, 180)
+            lsn      = get_realistic_stage(nc, demo, champion, age)
+            amt      = random.randint(5000, 200000)
+
+            # 🚀 V9 "Ideal Weights" Applied Directly
+            # Normalize features manually for the logic
+            nc_norm    = nc / 10.0
+            amt_norm   = amt / 200000.0
+            age_norm   = age / 180.0
+            dtc        = -random.randint(1, 180) # Closed deals have negative days to close
+            dtc_norm   = dtc / 180.0
+            stage_norm = lsn / 5.0
+
+            # Direct Weight Logic from User Prompt
+            logit = (
+                -1.0                              # bias
+                + 0.50 * stage_norm               # Stage
+                + 0.60 * (1 if demo else 0)       # Demo
+                + 0.40 * (1 if champion else 0)   # Champion
+                + 0.35 * nc_norm                 # Notes
+                - 0.20 * age_norm                # Deal Age
+                - 0.25 * abs(dtc_norm)           # Days to Close
+                - 0.10 * amt_norm                # Amount
+            )
+
+            # Sigmoid conversion
+            outcome_p = 1 / (1 + np.exp(-logit))
             
-            # 🚀 V8 "Aggressive Momentum" Weights
-            # Designed for a "High Stakes" demo experience. 
-            # Demos and advanced stages now command significant probability floor.
-            
-            # Base logic + Stage momentum (up to 30% for 'Contract Sent')
-            score = 0.20 + (nc * 0.05) + (lsn * 0.06) + (amt / 100000.0 * 0.05)
-            
-            # Milestone Multipliers (The "Wow Factor")
-            if demo: score += 0.35      # Huge jump for product demo
-            if champion: score += 0.15  # Solid boost for stakeholder buy-in
-            
-            # 4. Final Outcome (Closed Won/Lost) 
-            outcome_p = np.clip(score, 0.05, 0.95)
+            # Add slight noise
+            outcome_p = np.clip(outcome_p + np.random.normal(0, 0.03), 0.05, 0.95)
             is_won = noisy_bool(outcome_p)
             
             rows.append({
-                "name": f"Deal {org_id}-{i+1}",
+                "name": f"Ideal Deal {org_id}-{i+1}",
                 "amount": amt,
                 "stage": "Closed Won" if is_won else "Closed Lost",
                 "last_stage_num": lsn,
                 "owner": random.choice(owners),
-                "close_date": datetime.now() - timedelta(days=random.randint(0, 60)),
+                "close_date": datetime.now() + timedelta(days=dtc),
                 "company_id": random.choice(companies),
                 "organization_id": org_id,
                 "note_count": nc,
-                "deal_age": random.randint(5, 90),
+                "deal_age": age,
                 "demo_completed": demo,
                 "champion_identified": champion,
-                "days_to_close": random.randint(-5, 10)
+                "days_to_close": dtc,
+                "is_synthetic": True
             })
-
-        # Add a few representative 'Open' deals specifically for the dashboard
+        # FIX: open deals get realistic values using the simulator
         for i in range(20):
+            demo     = noisy_bool(0.35)
+            champion = noisy_bool(0.30)
+            nc       = random.randint(0, 8)
+            age      = random.randint(1, 20)
+            lsn      = get_realistic_stage(nc, demo, champion, age)
+            dtc      = random.randint(5, 60) # Days to close for open deals
             rows.append({
-                "name": f"Current Active-{i+1}",
-                "amount": random.randint(10000, 30000),
-                "stage": random.choice(stages_open),
-                "last_stage_num": 3,
-                "owner": random.choice(owners),
-                "close_date": datetime.now() + timedelta(days=random.randint(5, 60)),
-                "company_id": random.choice(companies),
-                "organization_id": org_id,
-                "note_count": random.randint(1, 5),
-                "deal_age": random.randint(1, 20),
-                "demo_completed": False,
-                "champion_identified": False,
-                "days_to_close": random.randint(5, 60)
+                "name":                f"Current Active-{i+1}",
+                "amount":              random.randint(10000, 30000),
+                "stage":               random.choice(OPEN_STAGES),
+                "last_stage_num":      lsn,
+                "owner":               random.choice(owners),
+                "close_date":          datetime.now() + timedelta(days=dtc),
+                "company_id":          random.choice(companies),
+                "organization_id":     org_id,
+                "note_count":          nc,
+                "deal_age":            age,
+                "demo_completed":      demo,
+                "champion_identified": champion,
+                "days_to_close":       dtc,
+                "is_synthetic":        True
             })
 
     df = pd.DataFrame(rows)
 
-    # ── Step 3: Insert into DB (Batch) ────────────────────────────────────
-    print("Inserting activity-aware deals...")
-
-    # RETURNING id and the name so we can map note_counts back
+    # ── Step 3: Insert (Hybrid) ───────────────────────────────────────
+    print("Inserting deals...")
     insert_query = """
     INSERT INTO deals (
         name, amount, stage, owner, close_date,
         company_id, organization_id, 
-        demo_completed, champion_identified, ai_score, last_stage_num, created_at
+        demo_completed, champion_identified, ai_score, last_stage_num, created_at, is_synthetic
     ) VALUES %s
     RETURNING id, name, organization_id
     """
     
+    nc_map      = {}
     deal_values = []
-    # Store note_count by name for the task generator
-    nc_map = {}
     for _, r in df.iterrows():
         lsn = int(r["last_stage_num"]) if pd.notnull(r.get("last_stage_num")) else None
         nc_map[r["name"]] = int(r["note_count"])
-        
         deal_values.append((
             r["name"], r["amount"], r["stage"], r["owner"], r["close_date"],
             r["company_id"], r["organization_id"],
             r["demo_completed"], r["champion_identified"], None, lsn,
-            datetime.now() - timedelta(days=int(r["deal_age"]))
+            datetime.now() - timedelta(days=int(r["deal_age"])),
+            r["is_synthetic"]
         ))
 
-    from psycopg2.extras import execute_values
     inserted_deals = execute_values(cur, insert_query, deal_values, fetch=True)
     conn.commit()
 
-    # Generate synthetic tasks matching the Booster's intended note_count
-    print("Generating booster tasks...")
+    print("Generating tasks...")
     t_vals = []
     for d_id, name, org_id in inserted_deals:
-        num_t = nc_map.get(name, 0)
-        for _ in range(num_t):
+        for _ in range(nc_map.get(name, 0)):
             t_vals.append((
-                f"Boost task for {name}",
-                "COMPLETED",
-                d_id,
-                org_id,
+                f"Task for {name}", "COMPLETED", d_id, org_id,
                 datetime.now() - timedelta(days=random.randint(0, 30))
             ))
-            
     if t_vals:
         execute_values(cur, "INSERT INTO tasks (title, status, deal_id, organization_id, created_at) VALUES %s", t_vals)
         conn.commit()
-        print(f"Generated {len(t_vals)} correlated booster tasks.")
+        print(f"Generated {len(t_vals)} tasks.")
 else:
-    print(f"Organization has sufficient real deal history. Skipping synthetic generation.")
+    print(f"Sufficient real data ({historical_count} deals). Skipping synthetic generation.")
 
-# Re-fetch for Step 5 scoring
+# Re-fetch all deals for scoring
 cur.execute("SELECT id, stage, amount, demo_completed, champion_identified, created_at, close_date FROM deals")
-inserted_deals = cur.fetchall()
-print(f"Inserted and fetched {len(inserted_deals)} deals.")
+all_deals = cur.fetchall()
+print(f"Total deals to score: {len(all_deals)}")
 
-# ── Step 4: Fetch training data from DB ────────────────────────────────
-print("\nPreparing training data for model...")
+# ── Step 4: Train ──────────────────────────────────────────────────────
+print("\nFetching training data...")
 train_query = """
-SELECT d.amount, d.stage, d.demo_completed, d.champion_identified, d.close_date, d.created_at, d.last_stage_num,
-       (SELECT COUNT(*) FROM tasks t WHERE t.deal_id = d.id) as note_count,
-       (CASE WHEN d.stage = 'Closed Won' THEN 1 ELSE 0 END) as outcome
+SELECT d.amount, d.demo_completed, d.champion_identified,
+       d.close_date, d.created_at, d.last_stage_num, d.is_synthetic,
+       (SELECT COUNT(*) FROM tasks t WHERE t.deal_id = d.id) AS note_count,
+       (CASE WHEN d.stage = 'Closed Won' THEN 1 ELSE 0 END) AS outcome
 FROM deals d
 WHERE d.stage IN ('Closed Won', 'Closed Lost')
 """
 train_df = pd.read_sql(train_query, conn)
 
 if train_df.empty:
-    raise ValueError("No training data found! Run with synthetic booster.")
+    raise ValueError("No training data found!")
 
-# Calculate deal_age from created_at in python to match predict logic
-now_ts = pd.Timestamp.now(tz='UTC')
-train_df["deal_age"] = (now_ts - pd.to_datetime(train_df["created_at"], utc=True)).dt.days
-train_df["days_to_close"] = (pd.to_datetime(train_df["close_date"], utc=True) - now_ts).dt.days
+now_ts = pd.Timestamp.now(tz="UTC")
+train_df["deal_age"]      = (now_ts - pd.to_datetime(train_df["created_at"], utc=True)).dt.days
+# FIX LEAKAGE: Use created_at instead of now for historical duration
+train_df["days_to_close"] = (pd.to_datetime(train_df["close_date"], utc=True) - pd.to_datetime(train_df["created_at"], utc=True)).dt.days
+train_df["stage_numeric"] = train_df["last_stage_num"].fillna(3).astype(float)
 
-# Use explicitly mapped stage_numeric if available, else default
-train_df["stage_numeric"] = train_df["last_stage_num"].fillna(3)
+# FIX: Feature clipping to prevent outlier distortion
+train_df["deal_age"]      = np.clip(train_df["deal_age"], 0, 180)
+train_df["days_to_close"] = np.clip(train_df["days_to_close"], -180, 180)
+# FIX: Amount normalization during training to match "Ideal Weights"
+train_df["amount"]        = train_df["amount"] / 200000.0
 
-# We already have outcomes and features
-print(f"Training on {len(train_df)} historical deals.")
+# NEW: interaction features & log transform
+train_df["note_count"]       = np.log1p(train_df["note_count"])
+train_df["stage_demo"]        = train_df["stage_numeric"] * train_df["demo_completed"]
+train_df["stage_notes"]       = train_df["stage_numeric"] * train_df["note_count"]
+train_df["activity_recency"] = train_df["note_count"] / (train_df["deal_age"] + 1)
+train_df["stalled"]          = ((train_df["note_count"] == 0) & (train_df["deal_age"] > 30)).astype(float)
+
+print(f"Training on {len(train_df)} deals.")
 
 features = [
     "amount",
@@ -223,100 +306,147 @@ features = [
     "deal_age",
     "demo_completed",
     "champion_identified",
-    "days_to_close"
+    "days_to_close",
+    "stage_demo",
+    "stage_notes",
+    "activity_recency",
+    "stalled",
 ]
 
 X = train_df[features].astype(float)
 y = train_df["outcome"]
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
-)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# THE 'PROFESSOR DEMO' LINEAR PIPELINE
-# StandardScaler: Makes 10,000 INR and 1 Task have equal weight impact
-# LogisticRegression: Ensures a smooth, 'curvy' probability response 
+# Hybrid Weighting: Synthetic matters 0.5x, Real matters 1.0x
+train_df["sample_weight"] = train_df["is_synthetic"].apply(lambda x: 0.5 if x else 1.0)
+sample_weight_train = train_df.loc[X_train.index, "sample_weight"]
+
+# IMPROVED: 2-Step Calibration for Weight Consistency
+# Step 1: Fit Scaler
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled  = scaler.transform(X_test)
+
+# Step 2: Fit Calibrated Classifier on Scaled Data
+# Passing sample_weight directly to .fit() so it's used during internal CV folds.
+base_lr = LogisticRegression(C=0.5, max_iter=1000, random_state=42, class_weight='balanced')
+calibrator = CalibratedClassifierCV(base_lr, method='sigmoid', cv=5)
+calibrator.fit(X_train_scaled, y_train, sample_weight=sample_weight_train)
+
+# Combine into a final Pipeline for easy saving/loading
 model = Pipeline([
-    ('scaler', StandardScaler()),
-    ('model', LogisticRegression(random_state=42, class_weight='balanced'))
+    ("scaler", scaler),
+    ("clf",    calibrator)
 ])
-model.fit(X_train, y_train)
 
 y_prob = model.predict_proba(X_test)[:, 1]
-print(f"Accuracy: {accuracy_score(y_test, model.predict(X_test)):.2f}")
-print(f"AUC: {roc_auc_score(y_test, y_prob):.2f}")
+print(f"Accuracy : {accuracy_score(y_test, model.predict(X_test)):.2f}")
+print(f"AUC      : {roc_auc_score(y_test, y_prob):.2f}")
+
+# Calibrated model doesn't have a direct .coef_ attribute easily accessible in the pipeline like vanilla LR
+# But we can still verify the base calibrator if needed.
+# For demo purposes, we usually skip complex weight printing for Calibrated models.
+print("\n── Model Evaluation ──")
+print(f"Accuracy : {accuracy_score(y_test, model.predict(X_test)):.2f}")
+print(f"AUC      : {roc_auc_score(y_test, y_prob):.2f}")
+
+# 📊 Visualizing Importance (Safe approach)
+try:
+    # Use training data for a parallel interpretation model if needed, 
+    # but here we'll just try to peek at the first calibrated estimator's base
+    first_clf = model.named_steps["clf"].calibrated_classifiers_[0].base_estimator
+    coef_df = pd.DataFrame({"feature": features, "coefficient": first_clf.coef_[0]})
+    coef_df = coef_df.sort_values("coefficient", ascending=True)
+    coef_df.plot(kind="barh", x="feature", y="coefficient", color="skyblue")
+    plt.title("Winning Factors Significance")
+    plt.grid(axis='x', linestyle='--', alpha=0.7)
+    plt.tight_layout()
+    plt.savefig("feature_importance.png")
+    print("Feature importance chart saved → feature_importance.png")
+except Exception as e:
+    print(f"Chart skipped/Simplified: Calibration doesn't export easy coefficients.")
 
 joblib.dump(model, "deal_model.pkl")
+print("\nModel saved → deal_model.pkl")
 
-# ── Step 5: Score deals (Vectorized Engine) ─────────────────────────────
-print("\nScoring deals...")
-
+# ── Step 5: Score ──────────────────────────────────────────────────────
+print("\nScoring all deals...")
 now = datetime.now().date()
-stage_map = {
-    "Appointment Scheduled": 1,
-    "Qualified to Buy": 2,
-    "Presentation Scheduled": 3,
-    "Decision Maker Bought-In": 4,
-    "Contract Sent": 5
-}
 
-print("Fetching activity density counts...")
 cur.execute("SELECT deal_id, COUNT(*) FROM tasks GROUP BY deal_id")
 task_counts = {r[0]: r[1] for r in cur.fetchall()}
 
-print(f"Preparing scores for {len(inserted_deals)} deals...")
 feat_list = []
-deal_ids = []
+deal_ids  = []
 
-for d in inserted_deals:
+for d in all_deals:
     try:
         d_id, stage, amount, demo, champion, created_at, close_date = d
-        nc = task_counts.get(d_id, 0)
+        nc  = task_counts.get(d_id, 0)
         age = (now - created_at.date()).days
-        cd = close_date.date() if hasattr(close_date, 'date') else close_date
+        cd  = close_date.date() if hasattr(close_date, "date") else close_date
         dtc = (cd - now).days
-        sn = stage_map.get(stage, 1)
+        sn  = STAGE_MAP.get(stage, 3)
 
-        feat_list.append([amount, sn, float(nc), float(age), 1 if demo else 0, 1 if champion else 0, float(dtc)])
+        # Apply transformations (Same as training)
+        amt_norm = float(amount) / 200000.0
+        age_clip = np.clip(float(age), 0, 180)
+        dtc_clip = np.clip(float(dtc), -180, 180)
+        
+        nc_log = np.log1p(float(nc))
+        sd     = float(sn) * float(1 if demo else 0)
+        sn_nc  = float(sn) * nc_log
+        rec    = nc_log / (age_clip + 1.0)
+        stall  = 1.0 if (nc == 0 and age_clip > 30) else 0.0
+
+        feat_list.append([
+            amt_norm, 
+            float(sn), 
+            nc_log, 
+            age_clip, 
+            float(1 if demo else 0), 
+            float(1 if champion else 0), 
+            dtc_clip,
+            sd,
+            sn_nc,
+            rec,
+            stall
+        ])
         deal_ids.append(int(d_id))
-    except: continue
+    except Exception as e:
+        print(f"Skipping deal {d_id}: {e}")
 
 if feat_list:
-    print(f"Vectorized prediction for {len(feat_list)} deals...")
     X_score = np.array(feat_list, dtype=float)
-    probs = model.predict_proba(X_score)[:, 1]
-    
+    probs   = model.predict_proba(X_score)[:, 1]
+
     update_payload = [(float(round(p * 100, 2)), deal_ids[i]) for i, p in enumerate(probs)]
-    print(f"Bulk updating {len(update_payload)} scores via temporary table...")
-    
-    # ── Robust Bulk Update Logic ──────────────────────────────────────
-    # Using a staged table ensures 100% commit reliability for large datasets
-    cur.execute("CREATE TEMP TABLE temp_ai_scores (ai_score NUMERIC, id INTEGER)")
-    from psycopg2.extras import execute_values
-    execute_values(cur, "INSERT INTO temp_ai_scores (ai_score, id) VALUES %s", update_payload)
-    
+
+    cur.execute("DROP TABLE IF EXISTS temp_ai_scores; CREATE TEMP TABLE temp_ai_scores (ai_score NUMERIC, id INTEGER)")
+    execute_values(cur, "INSERT INTO temp_ai_scores VALUES %s", update_payload)
     cur.execute("""
-        UPDATE deals 
-        SET ai_score = s.ai_score 
-        FROM temp_ai_scores s 
+        UPDATE deals
+        SET ai_score = s.ai_score
+        FROM temp_ai_scores s
         WHERE deals.id = s.id
     """)
     conn.commit()
-    print("AI scoring update complete.")
+    print(f"Scored and updated {len(update_payload)} deals. ✅")
 
 cur.close()
 conn.close()
-
-print("✅ Memory-density model and activity-scoring complete.")
+print("✅ Done.")
 
 print("""
-Run this to verify:
+Verify:
 
 SELECT stage,
        ROUND(AVG(ai_score),2) avg,
        ROUND(MIN(ai_score),2) min,
-       ROUND(MAX(ai_score),2) max
+       ROUND(MAX(ai_score),2) max,
+       COUNT(*) cnt
 FROM deals
 GROUP BY stage
-ORDER BY avg;
+ORDER BY avg DESC;
 """)

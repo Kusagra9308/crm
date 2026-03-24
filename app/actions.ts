@@ -8,6 +8,16 @@ import bcrypt from "bcryptjs";
 import { syncTenantDeals } from "@/lib/hubspotClient";
 import { getInsight } from "@/lib/utils";
 
+const STAGES = [
+  "Appointment Scheduled",       // 1
+  "Qualified to Buy",            // 2
+  "Presentation Scheduled",       // 3
+  "Decision Maker Bought-In",    // 4
+  "Contract Sent",               // 5
+  "Closed Won",                  // 6
+  "Closed Lost",                 // 7
+];
+
 export async function authenticate(
   prevState: string | undefined,
   formData: FormData,
@@ -467,12 +477,42 @@ export async function updateDeal(id: number, formData: FormData) {
   const demo_completed = formData.get("demo_completed") === "true";
   const champion_identified = formData.get("champion_identified") === "true";
 
+  // Fetch recent task count for activity gating
+  const ntRes = await query("SELECT COUNT(*) as count FROM tasks WHERE deal_id = $1", [id]);
+  const note_count = parseInt(ntRes.rows[0].count);
+
+  // --- Automation: STRICT Hard Gating Logic (Hierarchical) ---
+  // The stage is now PURELY DERIVED from milestones and activity. 
+  // You cannot "jump" stages in the dropdown without checking the boxes.
+  
+  let gatedStage = STAGES[0]; // Base: Appointment Scheduled (Stage 1)
+  
+  if (note_count >= 2) gatedStage = STAGES[1];     // Stage 2: Qualified
+  if (demo_completed) gatedStage = STAGES[2];      // Stage 3: Presentation Scheduled
+  if (champion_identified) gatedStage = STAGES[3]; // Stage 4: Decision Maker
+  
+  if (demo_completed && champion_identified && note_count >= 8) {
+      gatedStage = STAGES[4]; // Stage 5: Contract Sent
+  }
+
+  // Final Stage Selection: Use gated stage, but respect manual Won/Lost
+  let finalStage = gatedStage;
+  if (stage === "Closed Won" || stage === "Closed Lost") {
+      finalStage = stage;
+  }
+
   // Update DB
   await query(
     `UPDATE deals SET name = $1, amount = $2, stage = $3, close_date = $4, demo_completed = $5, champion_identified = $6 
      WHERE id = $7 AND organization_id = $8`,
-    [name, amount, stage, close_date, demo_completed, champion_identified, id, orgId]
+    [name, amount, finalStage, close_date, demo_completed, champion_identified, id, orgId]
   );
+
+  // If stage changed via gating, record in history
+  if (finalStage !== stage) {
+    await query(`INSERT INTO deal_stage_history (deal_id, stage) VALUES ($1, $2)`, [id, finalStage]);
+    console.log(`[STRICT-GATING] Deal ${id} reconciled to Stage: ${finalStage} (Requested: ${stage})`);
+  }
 
   // Recalculate AI Score on update
   await recalculateAiScore(id);
@@ -592,12 +632,27 @@ export async function updateTaskStatus(id: number, status: string) {
   // Automation: If task title contains 'demo' and marked as Completed, update deal flag
   if (task && task.deal_id && status === 'Completed') {
     const title = task.title.toLowerCase();
+    let stagePrompt = null;
+
     if (title.includes("demo")) {
       await query("UPDATE deals SET demo_completed = TRUE WHERE id = $1", [task.deal_id]);
+      stagePrompt = STAGES[2]; // Presentation Scheduled
       console.log(`[Task-Automation] Demo completed for Deal ${task.deal_id}`);
     } else if (title.includes("champion") || title.includes("decision maker")) {
       await query("UPDATE deals SET champion_identified = TRUE WHERE id = $1", [task.deal_id]);
+      stagePrompt = STAGES[3]; // Decision Maker Bought-In
       console.log(`[Task-Automation] Champion identified for Deal ${task.deal_id}`);
+    }
+
+    // Apply Hard Gating to stage if necessary
+    if (stagePrompt) {
+        const dRes = await query("SELECT stage FROM deals WHERE id = $1", [task.deal_id]);
+        const currentStage = dRes.rows[0]?.stage;
+        if (currentStage && STAGES.indexOf(currentStage) < STAGES.indexOf(stagePrompt)) {
+            await query("UPDATE deals SET stage = $1 WHERE id = $2", [stagePrompt, task.deal_id]);
+            await query(`INSERT INTO deal_stage_history (deal_id, stage) VALUES ($1, $2)`, [task.deal_id, stagePrompt]);
+            console.log(`[Task-Gating] Deal ${task.deal_id} auto-pushed to ${stagePrompt}`);
+        }
     }
     
     // Always recalculate score after a status change (might change momentum)

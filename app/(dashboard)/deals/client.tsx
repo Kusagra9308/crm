@@ -14,9 +14,12 @@ import {
   Upload,
   RefreshCw,
   X,
-  Target,
-  Users,
   CheckCircle2,
+  BrainCircuit,
+  Lightbulb,
+  TrendingUp,
+  AlertCircle,
+  Target
 } from "lucide-react";
 import { createDeal, updateDealStage, syncFromHubSpot, updateDeal, deleteDeal } from "@/app/actions";
 import { CrmStageTracker } from "@/components/hubspot/crm/CrmStageTracker";
@@ -224,6 +227,9 @@ export default function DealsClient({
   const [championIdentified, setChampionIdentified] = useState(false);
   const [selectedDeal, setSelectedDeal] = useState<any>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [explainData, setExplainData] = useState<any>(null);
+  const [isExplaining, setIsExplaining] = useState(false);
+  const [isExplainLoading, setIsExplainLoading] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -262,8 +268,37 @@ export default function DealsClient({
   useEffect(() => {
     if (isSidebarOpen) {
       console.log("SIDEBAR OPENED for deal:", selectedDeal?.id);
+      setExplainData(null);
+      setIsExplaining(false);
     }
   }, [isSidebarOpen, selectedDeal]);
+
+  async function toggleExplanation() {
+    if (isExplaining) {
+      setIsExplaining(false);
+      return;
+    }
+
+    if (!explainData) {
+      console.log("[toggle-explain] Triggering fetch for deal ID:", selectedDeal.id);
+      setIsExplainLoading(true);
+      try {
+        const res = await fetch(`/api/deals/${selectedDeal.id}/explain`);
+        if (res.ok) {
+          const data = await res.json();
+          setExplainData(data);
+        } else {
+          const errBody = await res.json();
+          console.error("Explanation API error:", errBody);
+        }
+      } catch (err) {
+        console.error("Failed to fetch explanation:", err);
+      } finally {
+        setIsExplainLoading(false);
+      }
+    }
+    setIsExplaining(true);
+  }
 
   async function handleSyncHubSpot() {
     setIsLoading(true);
@@ -657,6 +692,71 @@ export default function DealsClient({
                     <p className="mt-4 text-[11px] text-muted-foreground italic leading-relaxed">
                       "According to our ML model, this deal is {Math.round(selectedDeal.ai_score) > 50 ? 'trending towards a close' : 'at risk and needs more activity'}."
                     </p>
+                    
+                    <Button 
+                      onClick={(e) => {
+                        e.preventDefault();
+                        toggleExplanation();
+                      }}
+                      variant="outline"
+                      className={`w-full mt-4 h-9 text-xs font-bold gap-2 border-indigo-200 transition-all ${isExplaining ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'text-indigo-700 hover:bg-indigo-50 bg-white/50'}`}
+                    >
+                      {isExplainLoading ? (
+                        <span className="flex items-center gap-2">
+                           <span className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full" />
+                           Analyzing...
+                        </span>
+                      ) : (
+                        <>
+                          <BrainCircuit className="h-4 w-4" />
+                          {isExplaining ? "Hide AI Breakdown" : "Why this score? (Explain AI)"}
+                        </>
+                      )}
+                    </Button>
+
+                    {/* Expandable Explanation Div */}
+                    {isExplaining && explainData && (
+                      <div className="mt-4 space-y-6 pt-4 border-t border-indigo-100 animate-in fade-in slide-in-from-top-2 duration-300">
+                        {/* Why section */}
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                            <Target className="w-3 h-3" />
+                            Factor Analysis
+                          </div>
+                          <ul className="space-y-2.5">
+                            {explainData.why.map((reason: string, i: number) => (
+                              <li key={i} className="flex gap-2.5 text-[12px] text-slate-600 leading-snug">
+                                <span className="shrink-0">{reason.startsWith('✅') ? '✅' : '⚠️'}</span>
+                                <span>{reason.replace(/[✅⚠️]/g, '').trim()}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        {/* Actions section */}
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                            <Lightbulb className="w-3 h-3 text-amber-500 fill-amber-500/10" />
+                            Next Best Actions
+                          </div>
+                          <div className="space-y-2">
+                            {explainData.next_actions.map((action: string, i: number) => (
+                              <div key={i} className="bg-white/80 border border-indigo-100 p-2.5 rounded-lg text-[12px] text-indigo-700 font-semibold flex items-start gap-2 shadow-sm">
+                                <TrendingUp className="w-3 h-3 mt-0.5 shrink-0 opacity-60" />
+                                {action}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {isExplaining && !explainData && !isExplainLoading && (
+                      <div className="mt-4 bg-red-50 p-3 rounded-lg flex items-center gap-2 text-red-600 text-[11px] font-medium border border-red-100 italic">
+                        <AlertCircle className="w-4 h-4" />
+                        Analysis temporarily unavailable. Please try refreshing or checking if the AI engine is online.
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

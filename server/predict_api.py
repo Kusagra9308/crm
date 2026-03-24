@@ -57,8 +57,52 @@ STAGE_MAP = {
     "Qualified to Buy": 2,
     "Presentation Scheduled": 3,
     "Decision Maker Bought-In": 4,
-    "Contract Sent": 5
+    "Contract Sent": 5,
+    "Closed Won": 5,
+    "Closed Lost": 1
 }
+
+FEATURE_LABELS = {
+    "amount": "Deal size impact",
+    "stage_numeric": "Advanced deal stage",
+    "note_count": "Engagement activity",
+    "deal_age": "Days in pipeline",
+    "demo_completed": "Key milestone (Demo)",
+    "champion_identified": "Relationship (Champion)",
+    "days_to_close": "Timeline proximity",
+    "stage_demo": "Stage-to-Demo synergy",
+    "stage_notes": "Activity-to-Stage synergy",
+    "activity_recency": "Recent engagement speed",
+    "stalled": "Dead deal signal"
+}
+
+ACTION_RULES = [
+    {
+        "id": "demo",
+        "label": "Schedule and complete a demo",
+        "check": lambda d: not d.demo_completed
+    },
+    {
+        "id": "champion",
+        "label": "Identify a strong internal champion",
+        "check": lambda d: not d.champion_identified
+    },
+    {
+        "id": "activity",
+        "label": "Increase engagement (log more notes/calls)",
+        "check": lambda d: d.note_count < 5
+    },
+    {
+        "id": "stage",
+        "label": "Push to the next pipeline stage",
+        "check": lambda d: STAGE_MAP.get(d.stage, 1) < 4
+    },
+    {
+        "id": "close",
+        "label": "Set a realistic close date sooner",
+        "check": lambda d: d.days_to_close > 45
+    }
+]
 
 # ── Health check ───────────────────────────────────────────────────────────────
 @app.get("/health")
@@ -84,16 +128,33 @@ def predict(deal: DealFeatures):
     # Convert stage name to numeric value
     stage_num = STAGE_MAP.get(deal.stage, 1)
 
-    # Order must match ml_pipeline features: 
-    # [amount, stage_numeric, note_count, deal_age, demo_completed, champion_identified, days_to_close]
+    # Apply transformations (Same as training)
+    amt_norm = float(deal.amount) / 200000.0
+    age_clip = np.clip(float(deal.deal_age), 0, 180)
+    dtc_clip = np.clip(float(deal.days_to_close), -180, 180)
+    
+    nc_log   = np.log1p(float(deal.note_count))
+    stage_f  = float(stage_num)
+    demo_f   = float(1 if deal.demo_completed else 0)
+    
+    # Interaction & Derived features
+    rec   = nc_log / (age_clip + 1.0)
+    stall = 1.0 if (float(deal.note_count) == 0 and age_clip > 30) else 0.0
+
+    # Order must match ml_pipeline features:
+    # [amount, stage_numeric, note_count, deal_age, demo_completed, champion_identified, days_to_close, stage_demo, stage_notes, activity_recency, stalled]
     features = np.array([[
-        deal.amount,
-        float(stage_num),
-        float(deal.note_count),
-        float(deal.deal_age),
-        float(deal.demo_completed),
-        float(deal.champion_identified),
-        float(deal.days_to_close)
+        amt_norm,
+        stage_f,
+        nc_log,
+        age_clip,
+        demo_f,
+        float(1 if deal.champion_identified else 0),
+        dtc_clip,
+        stage_f * demo_f,
+        stage_f * nc_log,
+        rec,
+        stall
     ]], dtype=float)
 
     score = float(round(model.predict_proba(features)[0][1] * 100, 2))
@@ -104,6 +165,101 @@ def predict(deal: DealFeatures):
         score = max(score, 88.0)
         
     return {"ai_score": score}
+
+@app.post("/explain")
+def explain(deal: DealFeatures):
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    # 1. Get Score
+    prediction = predict(deal)
+    score = prediction["ai_score"]
+
+    # 2. Extract Coefficients (Peeking into Calibrated model)
+    try:
+        # model is a Pipeline with ("scaler", StandardScaler) and ("clf", CalibratedClassifierCV)
+        calibrated_model = model.named_steps["clf"]
+        
+        # Scikit-learn nested structure for calibrated objects
+        # In newer versions (since 1.2+), the fitted estimator is .estimator
+        # In very old versions, it was .base_estimator
+        internal_calib = calibrated_model.calibrated_classifiers_[0]
+        
+        base_lr = None
+        if hasattr(internal_calib, "estimator"):
+            base_lr = internal_calib.estimator
+        elif hasattr(internal_calib, "base_estimator"):
+            base_lr = internal_calib.base_estimator
+            
+        if base_lr is None or not hasattr(base_lr, "coef_"):
+            raise ValueError("Internal estimator coefficients not accessible")
+            
+        coefs = base_lr.coef_[0]
+    except Exception as e:
+        import traceback
+        print(f"Explanation Error: {e}")
+        # traceback.print_exc()
+        return {
+            "score": score,
+            "why": ["Analysis currently unavailable for this model architecture"],
+            "next_actions": []
+        }
+
+    # 3. Build Feature Vector (Scaled)
+    stage_num = STAGE_MAP.get(deal.stage, 1)
+    amt_norm = float(deal.amount) / 200000.0
+    age_clip = np.clip(float(deal.deal_age), 0, 180)
+    dtc_clip = np.clip(float(deal.days_to_close), -180, 180)
+    nc_log   = np.log1p(float(deal.note_count))
+    stage_f  = float(stage_num)
+    demo_f   = float(1 if deal.demo_completed else 0)
+    rec      = nc_log / (age_clip + 1.0)
+    stall    = 1.0 if (float(deal.note_count) == 0 and age_clip > 30) else 0.0
+
+    raw_features = [
+        amt_norm, stage_f, nc_log, age_clip, demo_f, 
+        float(1 if deal.champion_identified else 0), 
+        dtc_clip, stage_f * demo_f, stage_f * nc_log, rec, stall
+    ]
+    
+    # Scale them using the persistent scaler
+    scaler = model.named_steps["scaler"]
+    scaled_vector = scaler.transform([raw_features])[0]
+
+    # 4. Compute Contributions (Score Impact)
+    feature_names = [
+        "amount", "stage_numeric", "note_count", "deal_age", "demo_completed",
+        "champion_identified", "days_to_close", "stage_demo", "stage_notes", 
+        "activity_recency", "stalled"
+    ]
+    
+    impacts = []
+    for i, name in enumerate(feature_names):
+        impact = scaled_vector[i] * coefs[i]
+        impacts.append((name, impact))
+
+    # Sort by absolute impact
+    impacts = sorted(impacts, key=lambda x: abs(x[1]), reverse=True)
+
+    # Humanize
+    why = []
+    for name, val in impacts[:4]: # Top 4 contributors
+        label = FEATURE_LABELS.get(name, name)
+        status = "✅" if val > 0 else "⚠️"
+        direction = "helped score" if val > 0 else "reduced score"
+        why.append(f"{status} {label} {direction}")
+
+    # 5. Get Next Actions
+    actions = []
+    for rule in ACTION_RULES:
+        if rule["check"](deal):
+            actions.append(rule["label"])
+
+    return {
+        "score": score,
+        "why": why,
+        "next_actions": actions[:3] # Top 3 actions
+    }
 
 if __name__ == "__main__":
     import uvicorn
