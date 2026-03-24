@@ -14,6 +14,9 @@ export default function TasksClient({ initialTasks, contacts, companies, deals }
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
+    const [searchTerm, setSearchTerm] = useState("");
+    const [statusFilter, setStatusFilter] = useState("All");
+    const [priorityFilter, setPriorityFilter] = useState("All");
 
     async function handleSubmit(formData: FormData) {
         setIsLoading(true);
@@ -27,6 +30,18 @@ export default function TasksClient({ initialTasks, contacts, companies, deals }
         const newStatus = task.status === 'Completed' ? 'Pending' : 'Completed';
         await updateTaskStatus(task.id, newStatus);
     }
+
+    const filteredTasks = initialTasks.filter((task: any) => {
+        const matchesSearch = 
+            task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (task.company_name?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
+            (task.deal_name?.toLowerCase() || "").includes(searchTerm.toLowerCase());
+        
+        const matchesStatus = statusFilter === "All" || task.status === statusFilter;
+        const matchesPriority = priorityFilter === "All" || task.priority === priorityFilter;
+
+        return matchesSearch && matchesStatus && matchesPriority;
+    });
 
     return (
         <div className="space-y-8">
@@ -43,8 +58,39 @@ export default function TasksClient({ initialTasks, contacts, companies, deals }
                 </Button>
             </div>
 
+            {/* FILTERS */}
+            <div className="flex flex-col md:flex-row gap-4">
+                <div className="relative flex-1">
+                    <Input 
+                        placeholder="Search tasks, companies or deals..." 
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="pl-4 h-11"
+                    />
+                </div>
+                <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="flex h-11 rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-w-[140px]"
+                >
+                    <option value="All">All Statuses</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Completed">Completed</option>
+                </select>
+                <select
+                    value={priorityFilter}
+                    onChange={(e) => setPriorityFilter(e.target.value)}
+                    className="flex h-11 rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-w-[140px]"
+                >
+                    <option value="All">All Priorities</option>
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Low">Low</option>
+                </select>
+            </div>
+
             <div className="grid gap-4">
-                {initialTasks.map((task) => (
+                {filteredTasks.map((task) => (
                     <Card key={task.id} className="p-4 flex items-center gap-4 hover:shadow-md transition-shadow group">
                         <button
                             onClick={() => toggleStatus(task)}
@@ -112,9 +158,9 @@ export default function TasksClient({ initialTasks, contacts, companies, deals }
                         </div>
                     </Card>
                 ))}
-                {initialTasks.length === 0 && (
+                {filteredTasks.length === 0 && (
                     <div className="text-center py-12 text-muted-foreground border border-dashed rounded-lg">
-                        No tasks found. Create one to get started.
+                        No tasks match your filters.
                     </div>
                 )}
             </div>
