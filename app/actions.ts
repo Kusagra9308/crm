@@ -761,9 +761,31 @@ AND organization_id = $1
 
   const contactsChange = calcChange(currentMonthContacts, lastMonthContacts);
 
-  // Pipeline Trend (Simple Mock for the trend based on newly added deals this month vs last)
-  const pipelineChange = "+5.4%"; // Realistically we'd compare sums of open deals created then vs now
-  const tasksChange = "-1.2%";
+  // Pipeline Trend (Newly added deals value this month vs last)
+  const currentPipelineNew = await query(
+    "SELECT SUM(amount) as total FROM deals WHERE organization_id = $1 AND created_at >= DATE_TRUNC('month', NOW()) AND stage NOT IN ('Closed Won', 'Closed Lost')",
+    [orgId]
+  ).then(r => Number(r.rows[0].total) || 0);
+
+  const lastPipelineNew = await query(
+    "SELECT SUM(amount) as total FROM deals WHERE organization_id = $1 AND created_at >= DATE_TRUNC('month', NOW() - INTERVAL '1 month') AND created_at < DATE_TRUNC('month', NOW()) AND stage NOT IN ('Closed Won', 'Closed Lost')",
+    [orgId]
+  ).then(r => Number(r.rows[0].total) || 0);
+
+  const pipelineChange = calcChange(currentPipelineNew, lastPipelineNew);
+
+  // Task volume trend
+  const currentMonthTasks = await query(
+    "SELECT COUNT(*) as count FROM tasks WHERE organization_id = $1 AND created_at >= DATE_TRUNC('month', NOW())",
+    [orgId]
+  ).then(r => parseInt(r.rows[0].count));
+
+  const lastMonthTasks = await query(
+    "SELECT COUNT(*) as count FROM tasks WHERE organization_id = $1 AND created_at >= DATE_TRUNC('month', NOW() - INTERVAL '1 month') AND created_at < DATE_TRUNC('month', NOW())",
+    [orgId]
+  ).then(r => parseInt(r.rows[0].count));
+
+  const tasksChange = calcChange(currentMonthTasks, lastMonthTasks);
 
   return {
     totalRevenue,

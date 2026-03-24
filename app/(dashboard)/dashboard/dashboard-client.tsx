@@ -61,7 +61,8 @@ export default function DashboardClient({ stats }: { stats: any }) {
     const isPositive = changeString.startsWith("+");
     const isNegative = changeString.startsWith("-");
     return {
-      color: isPositive ? "text-emerald-500" : isNegative ? "text-rose-500" : "text-muted-foreground",
+      color: isPositive ? "text-emerald-400" : isNegative ? "text-rose-400" : "text-slate-300",
+      bg: isPositive ? "bg-emerald-500/20" : isNegative ? "bg-rose-500/20" : "bg-slate-500/20",
       value: changeString,
       direction: isPositive ? "up" : isNegative ? "down" : "neutral"
     };
@@ -90,13 +91,13 @@ export default function DashboardClient({ stats }: { stats: any }) {
     {
       title: "Weighted Forecast",
       value: `₹${Number(weightedRevenue).toLocaleString("en-IN")}`,
-      trend: { value: "AI Target", color: "text-blue-500" },
+      trend: { value: "AI Target", color: "text-blue-300", bg: "bg-blue-500/20" },
       icon: BarChart3,
     },
     {
       title: "Pipeline Health",
       value: `${Math.round(pipelineHealth)}%`,
-      trend: { value: "Avg. Win Prob", color: "text-muted-foreground" },
+      trend: { value: "Avg. Win Prob", color: "text-amber-300", bg: "bg-amber-500/20" },
       icon: TrendingUp,
     },
   ];
@@ -131,7 +132,7 @@ export default function DashboardClient({ stats }: { stats: any }) {
                  <h1 className="text-4xl md:text-5xl font-black tracking-tighter">{heroCard.value}</h1>
                  <div className="flex items-center gap-2">
                     <span className={`text-xs font-bold flex items-center gap-1 ${heroCard.trend.color}`}>
-                       {heroCard.trend.value} vs last month
+                       {/* Trend value hidden for clean look */}
                     </span>
                  </div>
               </div>
@@ -156,9 +157,6 @@ export default function DashboardClient({ stats }: { stats: any }) {
                     )}
                  </p>
               </div>
-              <Button variant="ghost" size="sm" className="h-8 text-[10px] text-slate-400 hover:text-white hover:bg-white/5 uppercase font-bold tracking-widest">
-                 View Forecast
-              </Button>
            </div>
 
            {/* Decorative background flare */}
@@ -181,7 +179,7 @@ export default function DashboardClient({ stats }: { stats: any }) {
                    <div className="h-8 w-8 rounded-lg bg-muted flex items-center justify-center">
                       <card.icon className="h-4 w-4 text-muted-foreground" />
                    </div>
-                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded bg-muted ${card.trend.color}`}>
+                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${card.trend.bg} ${card.trend.color}`}>
                       {card.trend.value}
                    </span>
                 </div>

@@ -19,10 +19,6 @@ export function Header() {
                     <Bell className="h-5 w-5 text-muted-foreground" />
                     <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-error ring-2 ring-surface" />
                 </Button>
-                <Button className="gap-2 shadow-lg shadow-primary/20">
-                    <Plus className="h-4 w-4" />
-                    Create New
-                </Button>
             </div>
         </header>
     );
