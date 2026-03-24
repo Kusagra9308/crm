@@ -11,10 +11,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from fastapi.responses import PlainTextResponse
 
 # ── Load model once at startup ─────────────────────────────────────────────────
 # The model is in the root, go up one level from /server
@@ -62,9 +61,10 @@ STAGE_MAP = {
 }
 
 # ── Health check ───────────────────────────────────────────────────────────────
-@app.get("/health", response_class=PlainTextResponse)
+@app.get("/health")
+@app.head("/health")
 def health():
-    return "OK"
+    return Response(content="OK", media_type="text/plain")
 
 # ── Predict endpoint ───────────────────────────────────────────────────────────
 @app.post("/predict")

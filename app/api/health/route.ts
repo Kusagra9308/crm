@@ -8,3 +8,6 @@ export async function GET() {
     headers: { "Content-Type": "text/plain" },
   });
 }
+export async function HEAD() {
+  return new NextResponse(null, { status: 200 });
+}
