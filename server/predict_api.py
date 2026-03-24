@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from fastapi.responses import PlainTextResponse
 
 # ── Load model once at startup ─────────────────────────────────────────────────
 # The model is in the root, go up one level from /server
@@ -61,9 +62,9 @@ STAGE_MAP = {
 }
 
 # ── Health check ───────────────────────────────────────────────────────────────
-@app.get("/health")
+@app.get("/health", response_class=PlainTextResponse)
 def health():
-    return {"status": "ok", "model_loaded": model is not None}
+    return "OK"
 
 # ── Predict endpoint ───────────────────────────────────────────────────────────
 @app.post("/predict")
