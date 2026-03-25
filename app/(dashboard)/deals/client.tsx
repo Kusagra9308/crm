@@ -716,7 +716,7 @@ export default function DealsClient({
                       ) : (
                         <>
                           <BrainCircuit className="h-4 w-4" />
-                          {isExplaining ? "Hide AI Breakdown" : "Why this score? "}
+                          {isExplaining ? "Hide  Breakdown" : "Why this score? "}
                         </>
                       )}
                     </Button>
