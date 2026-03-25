@@ -131,7 +131,6 @@ if needed > 0:
     deals_per_org = max(1, needed // len(org_ids))
 
     for org_id in org_ids:
-        print(f"Adding {deals_per_org} hybrid deals for Org {org_id}...")
         for i in range(deals_per_org):
             nc = random.randint(0, 15)
             demo = noisy_bool(0.35)
@@ -159,7 +158,7 @@ if needed > 0:
             )
 
             outcome_p = 1 / (1 + np.exp(-logit))
-
+            # noise
             outcome_p = np.clip(outcome_p + np.random.normal(0, 0.03), 0.05, 0.95)
             is_won = noisy_bool(outcome_p)
 
@@ -187,6 +186,7 @@ if needed > 0:
             champion = noisy_bool(0.30)
             nc = random.randint(0, 8)
             age = random.randint(1, 20)
+            # assign stage
             lsn = get_realistic_stage(nc, demo, champion, age)
             dtc = random.randint(5, 60)
             rows.append(
@@ -210,7 +210,6 @@ if needed > 0:
 
     df = pd.DataFrame(rows)
 
-    print("Inserting deals...")
     insert_query = """
     INSERT INTO deals (
         name, amount, stage, owner, close_date,
@@ -244,9 +243,7 @@ if needed > 0:
         )
 
     inserted_deals = execute_values(cur, insert_query, deal_values, fetch=True)
-    print("Generating tasks...")
     t_vals = []
-    # FIX: RETURNING id captures real IDs for attachment
     for d_id, deal_name, org_id in inserted_deals:
         nc = nc_map.get(deal_name, 0)
         for _ in range(nc):
@@ -277,14 +274,11 @@ else:
     )
 
 
-cur.execute(
-    "SELECT id, stage, amount, demo_completed, champion_identified, created_at, close_date FROM deals"
-)
+# Score only real or non-demo organizations to prevent overwriting manual calibrations
+cur.execute("SELECT id, stage, amount, demo_completed, champion_identified, created_at, close_date FROM deals WHERE organization_id != 11")
 all_deals = cur.fetchall()
-print(f"Total deals to score: {len(all_deals)}")
 
 
-print("\nFetching training data...")
 train_query = """
 SELECT d.amount, d.demo_completed, d.champion_identified,
        d.close_date, d.created_at, d.last_stage_num, d.is_synthetic,
@@ -375,8 +369,6 @@ model = Pipeline([("clf", calibrator)])
 
 y_prob = model.predict_proba(X_test)[:, 1]
 
-
-print("\n── Shadow Model Audit (No-Stage) ──")
 features_no_stage = [f for f in features if "stage" not in f]
 X_train_shadow = X_train[features_no_stage]
 X_test_shadow = X_test[features_no_stage]
@@ -388,9 +380,6 @@ shadow_pipeline.fit(X_train_shadow, y_train, clf__sample_weight=sample_weight_tr
 y_prob_shadow = shadow_pipeline.predict_proba(X_test_shadow)[:, 1]
 auc_shadow = roc_auc_score(y_test, y_prob_shadow)
 
-print(f"Full Model AUC (with stage) : {roc_auc_score(y_test, y_prob):.2f}")
-print(f"Shadow Model AUC (no stage) : {auc_shadow:.2f}")
-print(f"Leakage Weight (Delta)      : {roc_auc_score(y_test, y_prob) - auc_shadow:.2f}")
 if (roc_auc_score(y_test, y_prob) - auc_shadow) > 0.15:
     print("⚠️ WARNING: Model is heavily dependent on stage signal (shortcut risk).")
 else:
@@ -485,7 +474,6 @@ if feat_list:
     """
     )
     conn.commit()
-    print(f"Scored and updated {len(update_payload)} deals. ✅")
 
 cur.close()
 conn.close()
