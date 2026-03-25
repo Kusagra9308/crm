@@ -230,6 +230,7 @@ export default function DealsClient({
   const [explainData, setExplainData] = useState<any>(null);
   const [isExplaining, setIsExplaining] = useState(false);
   const [isExplainLoading, setIsExplainLoading] = useState(false);
+  const [explainError, setExplainError] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -270,6 +271,7 @@ export default function DealsClient({
       console.log("SIDEBAR OPENED for deal:", selectedDeal?.id);
       setExplainData(null);
       setIsExplaining(false);
+      setExplainError(null);
     }
   }, [isSidebarOpen, selectedDeal]);
 
@@ -282,17 +284,22 @@ export default function DealsClient({
     if (!explainData) {
       console.log("[toggle-explain] Triggering fetch for deal ID:", selectedDeal.id);
       setIsExplainLoading(true);
+      setExplainError(null);
       try {
         const res = await fetch(`/api/deals/${selectedDeal.id}/explain`);
         if (res.ok) {
           const data = await res.json();
           setExplainData(data);
         } else {
-          const errBody = await res.json();
-          console.error("Explanation API error:", errBody);
+          try {
+            const errBody = await res.json();
+            setExplainError(errBody.detail || errBody.error || "Failed to fetch explanation");
+          } catch {
+            setExplainError("Server returned a non-JSON error.");
+          }
         }
       } catch (err) {
-        console.error("Failed to fetch explanation:", err);
+        setExplainError("Network error: Could not reach the API.");
       } finally {
         setIsExplainLoading(false);
       }
@@ -752,9 +759,17 @@ export default function DealsClient({
                     )}
 
                     {isExplaining && !explainData && !isExplainLoading && (
-                      <div className="mt-4 bg-red-50 p-3 rounded-lg flex items-center gap-2 text-red-600 text-[11px] font-medium border border-red-100 italic">
-                        <AlertCircle className="w-4 h-4" />
-                        Analysis temporarily unavailable. Please try refreshing or checking if the AI engine is online.
+                      <div className="mt-4 bg-rose-50 p-4 rounded-xl flex flex-col gap-2 text-rose-700 border border-rose-100 shadow-sm">
+                        <div className="flex items-center gap-2 font-bold text-[12px]">
+                          <AlertCircle className="w-4 h-4" />
+                          Diagnostic Alert: Analysis Unavailable
+                        </div>
+                        <p className="text-[11px] leading-relaxed">
+                          {explainError || "Unknown error occurred while contacting the AI Engine."}
+                        </p>
+                        <p className="text-[10px] mt-1 p-2 bg-white/50 rounded border border-rose-200/50 font-mono break-all opacity-70">
+                           Action: Verify PYTHON_API_URL in Environment
+                        </p>
                       </div>
                     )}
                   </div>

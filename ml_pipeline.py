@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import execute_values
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, roc_auc_score
@@ -25,7 +24,6 @@ def get_connection():
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL not found in environment!")
     url = DATABASE_URL.replace("sslmode=verify-full", "sslmode=require")
-    print(f"Connecting to: {url.split('@')[-1].split('/')[0]}")
     return psycopg2.connect(url)
 
 
@@ -120,11 +118,9 @@ if needed > 0:
     if not org_ids:
         org_ids = [1]
 
-    # Target Org 11 specifically for the audit demo
     if 11 not in org_ids:
         org_ids.append(11)
 
-    # 🎯 TARGET: Redo changes for Sharma Enterprise (Org 11)
     org_ids = [o for o in org_ids if o == 11] or [11]
     print(f"Targeting Organizations: {org_ids}")
 
@@ -378,7 +374,6 @@ calibrator.fit(X_train_scaled, y_train, sample_weight=sample_weight_train)
 model = Pipeline([("clf", calibrator)])
 
 y_prob = model.predict_proba(X_test)[:, 1]
-
 
 
 print("\n── Shadow Model Audit (No-Stage) ──")

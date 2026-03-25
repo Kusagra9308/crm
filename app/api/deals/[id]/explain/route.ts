@@ -57,8 +57,13 @@ export async function GET(
 
     if (!res_py.ok) {
       const err = await res_py.text();
-      console.error("[explain] Python API Error:", res_py.status, err);
-      return NextResponse.json({ error: "Explanation failed", detail: err }, { status: res_py.status });
+      console.error(`[explain] Python API Error (${res_py.status}):`, err);
+      return NextResponse.json({ 
+        error: "Python AI Engine Error", 
+        detail: err,
+        status: res_py.status,
+        url: PYTHON_API_URL
+      }, { status: 502 }); // Bad Gateway
     }
 
     const data = await res_py.json();
