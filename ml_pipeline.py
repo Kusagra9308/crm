@@ -274,7 +274,7 @@ else:
     )
 
 
-# Score only real or non-demo organizations to prevent overwriting manual calibrations
+
 cur.execute("SELECT id, stage, amount, demo_completed, champion_identified, created_at, close_date FROM deals WHERE organization_id != 11")
 all_deals = cur.fetchall()
 
