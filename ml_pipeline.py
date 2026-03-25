@@ -284,10 +284,10 @@ train_df["deal_age"]      = (now_ts - pd.to_datetime(train_df["created_at"], utc
 train_df["days_to_close"] = (pd.to_datetime(train_df["close_date"], utc=True) - pd.to_datetime(train_df["created_at"], utc=True)).dt.days
 train_df["stage_numeric"] = train_df["last_stage_num"].fillna(3).astype(float)
 
-# FIX: Feature clipping to prevent outlier distortion
-train_df["deal_age"]      = np.clip(train_df["deal_age"], 0, 180)
-train_df["days_to_close"] = np.clip(train_df["days_to_close"], -180, 180)
 # FIX: Amount normalization during training to match "Ideal Weights"
+train_df["deal_age"]      = train_df["deal_age"] / 180.0
+train_df["days_to_close"] = train_df["days_to_close"] / 180.0
+train_df["stage_numeric"] = train_df["stage_numeric"] / 5.0
 train_df["amount"]        = train_df["amount"] / 200000.0
 
 # NEW: interaction features & log transform
@@ -295,7 +295,13 @@ train_df["note_count"]       = np.log1p(train_df["note_count"])
 train_df["stage_demo"]        = train_df["stage_numeric"] * train_df["demo_completed"]
 train_df["stage_notes"]       = train_df["stage_numeric"] * train_df["note_count"]
 train_df["activity_recency"] = train_df["note_count"] / (train_df["deal_age"] + 1)
-train_df["stalled"]          = ((train_df["note_count"] == 0) & (train_df["deal_age"] > 30)).astype(float)
+train_df["stalled"]          = ((train_df["note_count"] == 0) & (train_df["deal_age"] > 0.16)).astype(float) # 30/180
+
+# Audit Features (Bullshit detection)
+# Risk: High stage but low activity
+train_df["late_stage_risk"] = ((train_df["stage_numeric"] >= 0.8) & (train_df["note_count"] < np.log1p(5))).astype(float)
+# Risk: Advanced stage but no demo
+train_df["milestone_gap"]   = ((train_df["stage_numeric"] >= 0.6) & (train_df["demo_completed"] == 0)).astype(float)
 
 print(f"Training on {len(train_df)} deals.")
 
@@ -311,6 +317,8 @@ features = [
     "stage_notes",
     "activity_recency",
     "stalled",
+    "late_stage_risk",
+    "milestone_gap",
 ]
 
 X = train_df[features].astype(float)
@@ -322,21 +330,19 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 train_df["sample_weight"] = train_df["is_synthetic"].apply(lambda x: 0.5 if x else 1.0)
 sample_weight_train = train_df.loc[X_train.index, "sample_weight"]
 
-# IMPROVED: 2-Step Calibration for Weight Consistency
-# Step 1: Fit Scaler
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled  = scaler.transform(X_test)
+# Manual Scaling only (No StandardScaler)
+X_train_scaled = X_train
+X_test_scaled  = X_test
 
 # Step 2: Fit Calibrated Classifier on Scaled Data
-# Passing sample_weight directly to .fit() so it's used during internal CV folds.
-base_lr = LogisticRegression(C=0.5, max_iter=1000, random_state=42, class_weight='balanced')
+# Lower C to 0.1 to prevent gaming stage as a shortcut
+base_lr = LogisticRegression(C=0.1, max_iter=1000, random_state=42, class_weight='balanced')
 calibrator = CalibratedClassifierCV(base_lr, method='sigmoid', cv=5)
 calibrator.fit(X_train_scaled, y_train, sample_weight=sample_weight_train)
 
-# Combine into a final Pipeline for easy saving/loading
+# Combined into a final Pipeline for easy saving/loading
+# Removed StandardScaler to prevent double-scaling and preserve "Ideal Weights" interpretability
 model = Pipeline([
-    ("scaler", scaler),
     ("clf",    calibrator)
 ])
 
@@ -344,12 +350,26 @@ y_prob = model.predict_proba(X_test)[:, 1]
 print(f"Accuracy : {accuracy_score(y_test, model.predict(X_test)):.2f}")
 print(f"AUC      : {roc_auc_score(y_test, y_prob):.2f}")
 
-# Calibrated model doesn't have a direct .coef_ attribute easily accessible in the pipeline like vanilla LR
-# But we can still verify the base calibrator if needed.
-# For demo purposes, we usually skip complex weight printing for Calibrated models.
-print("\n── Model Evaluation ──")
-print(f"Accuracy : {accuracy_score(y_test, model.predict(X_test)):.2f}")
-print(f"AUC      : {roc_auc_score(y_test, y_prob):.2f}")
+# ── Shadow Model Comparison (Leakage Audit) ───────────────────────────
+print("\n── Shadow Model Audit (No-Stage) ──")
+features_no_stage = [f for f in features if "stage" not in f]
+X_train_shadow = X_train[features_no_stage]
+X_test_shadow  = X_test[features_no_stage]
+
+shadow_pipeline = Pipeline([
+    ("clf", CalibratedClassifierCV(LogisticRegression(C=0.1, random_state=42), cv=5))
+])
+shadow_pipeline.fit(X_train_shadow, y_train, clf__sample_weight=sample_weight_train)
+y_prob_shadow = shadow_pipeline.predict_proba(X_test_shadow)[:, 1]
+auc_shadow = roc_auc_score(y_test, y_prob_shadow)
+
+print(f"Full Model AUC (with stage) : {roc_auc_score(y_test, y_prob):.2f}")
+print(f"Shadow Model AUC (no stage) : {auc_shadow:.2f}")
+print(f"Leakage Weight (Delta)      : {roc_auc_score(y_test, y_prob) - auc_shadow:.2f}")
+if (roc_auc_score(y_test, y_prob) - auc_shadow) > 0.15:
+    print("⚠️ WARNING: Model is heavily dependent on stage signal (shortcut risk).")
+else:
+    print("✅ OK: Behavioral signals are driving the model robustness.")
 
 # 📊 Visualizing Importance (Safe approach)
 try:
@@ -386,32 +406,40 @@ for d in all_deals:
         nc  = task_counts.get(d_id, 0)
         age = (now - created_at.date()).days
         cd  = close_date.date() if hasattr(close_date, "date") else close_date
-        dtc = (cd - now).days
+        cr  = created_at.date() if hasattr(created_at, "date") else created_at
+        dtc = (cd - cr).days # Total Planned Duration (Intent)
         sn  = STAGE_MAP.get(stage, 3)
 
         # Apply transformations (Same as training)
         amt_norm = float(amount) / 200000.0
-        age_clip = np.clip(float(age), 0, 180)
-        dtc_clip = np.clip(float(dtc), -180, 180)
+        age_norm = np.clip(float(age), 0, 180) / 180.0
+        dtc_norm = np.clip(float(dtc), -180, 180) / 180.0
+        st_norm  = float(sn) / 5.0
         
         nc_log = np.log1p(float(nc))
-        sd     = float(sn) * float(1 if demo else 0)
-        sn_nc  = float(sn) * nc_log
-        rec    = nc_log / (age_clip + 1.0)
-        stall  = 1.0 if (nc == 0 and age_clip > 30) else 0.0
+        sd     = st_norm * float(1 if demo else 0)
+        sn_nc  = st_norm * nc_log
+        rec    = nc_log / (float(age)/180.0 + 1.0) # age is already small
+        stall  = 1.0 if (nc == 0 and age > 30) else 0.0
+
+        # Audit Features (Same as training)
+        ls_risk = 1.0 if (sn >= 4 and nc < 5) else 0.0
+        m_gap   = 1.0 if (sn >= 3 and demo == 0) else 0.0
 
         feat_list.append([
             amt_norm, 
-            float(sn), 
+            st_norm, 
             nc_log, 
-            age_clip, 
+            age_norm, 
             float(1 if demo else 0), 
             float(1 if champion else 0), 
-            dtc_clip,
+            dtc_norm,
             sd,
             sn_nc,
             rec,
-            stall
+            stall,
+            ls_risk,
+            m_gap
         ])
         deal_ids.append(int(d_id))
     except Exception as e:

@@ -73,7 +73,9 @@ FEATURE_LABELS = {
     "stage_demo": "Stage-to-Demo synergy",
     "stage_notes": "Activity-to-Stage synergy",
     "activity_recency": "Recent engagement speed",
-    "stalled": "Dead deal signal"
+    "stalled": "Dead deal signal",
+    "late_stage_risk": "Low activity for this stage",
+    "milestone_gap": "Missing mandatory milestone"
 }
 
 ACTION_RULES = [
@@ -125,36 +127,43 @@ def predict(deal: DealFeatures):
     if deal.stage == "Closed Lost":
         return {"ai_score": 0.0}
 
-    # Convert stage name to numeric value
+    # Map frontend stage names to model numeric labels
     stage_num = STAGE_MAP.get(deal.stage, 1)
 
     # Apply transformations (Same as training)
     amt_norm = float(deal.amount) / 200000.0
-    age_clip = np.clip(float(deal.deal_age), 0, 180)
-    dtc_clip = np.clip(float(deal.days_to_close), -180, 180)
+    age_norm = np.clip(float(deal.deal_age), 0, 180) / 180.0
+    dtc_norm = np.clip(float(deal.days_to_close), -180, 180) / 180.0
+    st_norm  = float(stage_num) / 5.0
     
     nc_log   = np.log1p(float(deal.note_count))
-    stage_f  = float(stage_num)
     demo_f   = float(1 if deal.demo_completed else 0)
     
     # Interaction & Derived features
-    rec   = nc_log / (age_clip + 1.0)
-    stall = 1.0 if (float(deal.note_count) == 0 and age_clip > 30) else 0.0
+    sd    = st_norm * demo_f
+    sn_nc = st_norm * nc_log
+    rec   = nc_log / (age_norm + 1.0)
+    stall = 1.0 if (float(deal.note_count) == 0 and float(deal.deal_age) > 30) else 0.0
+
+    # Audit Features
+    ls_risk = 1.0 if (stage_num >= 4 and float(deal.note_count) < 5) else 0.0
+    m_gap   = 1.0 if (stage_num >= 3 and not deal.demo_completed) else 0.0
 
     # Order must match ml_pipeline features:
-    # [amount, stage_numeric, note_count, deal_age, demo_completed, champion_identified, days_to_close, stage_demo, stage_notes, activity_recency, stalled]
     features = np.array([[
         amt_norm,
-        stage_f,
+        st_norm,
         nc_log,
-        age_clip,
+        age_norm,
         demo_f,
         float(1 if deal.champion_identified else 0),
-        dtc_clip,
-        stage_f * demo_f,
-        stage_f * nc_log,
+        dtc_norm,
+        sd,
+        sn_nc,
         rec,
-        stall
+        stall,
+        ls_risk,
+        m_gap
     ]], dtype=float)
 
     score = float(round(model.predict_proba(features)[0][1] * 100, 2))
@@ -205,37 +214,39 @@ def explain(deal: DealFeatures):
             "next_actions": []
         }
 
-    # 3. Build Feature Vector (Scaled)
+    # 3. Build Feature Vector (Manual Scaling)
     stage_num = STAGE_MAP.get(deal.stage, 1)
     amt_norm = float(deal.amount) / 200000.0
-    age_clip = np.clip(float(deal.deal_age), 0, 180)
-    dtc_clip = np.clip(float(deal.days_to_close), -180, 180)
+    age_norm = np.clip(float(deal.deal_age), 0, 180) / 180.0
+    dtc_norm = np.clip(float(deal.days_to_close), -180, 180) / 180.0
+    st_norm  = float(stage_num) / 5.0
     nc_log   = np.log1p(float(deal.note_count))
-    stage_f  = float(stage_num)
     demo_f   = float(1 if deal.demo_completed else 0)
-    rec      = nc_log / (age_clip + 1.0)
-    stall    = 1.0 if (float(deal.note_count) == 0 and age_clip > 30) else 0.0
-
-    raw_features = [
-        amt_norm, stage_f, nc_log, age_clip, demo_f, 
-        float(1 if deal.champion_identified else 0), 
-        dtc_clip, stage_f * demo_f, stage_f * nc_log, rec, stall
-    ]
     
-    # Scale them using the persistent scaler
-    scaler = model.named_steps["scaler"]
-    scaled_vector = scaler.transform([raw_features])[0]
+    sd    = st_norm * demo_f
+    sn_nc = st_norm * nc_log
+    rec   = nc_log / (age_norm + 1.0)
+    stall = 1.0 if (float(deal.note_count) == 0 and float(deal.deal_age) > 30) else 0.0
+    
+    ls_risk = 1.0 if (stage_num >= 4 and float(deal.note_count) < 5) else 0.0
+    m_gap   = 1.0 if (stage_num >= 3 and not deal.demo_completed) else 0.0
+
+    final_vector = [
+        amt_norm, st_norm, nc_log, age_norm, demo_f, 
+        float(1 if deal.champion_identified else 0), 
+        dtc_norm, sd, sn_nc, rec, stall, ls_risk, m_gap
+    ]
 
     # 4. Compute Contributions (Score Impact)
     feature_names = [
         "amount", "stage_numeric", "note_count", "deal_age", "demo_completed",
         "champion_identified", "days_to_close", "stage_demo", "stage_notes", 
-        "activity_recency", "stalled"
+        "activity_recency", "stalled", "late_stage_risk", "milestone_gap"
     ]
     
     impacts = []
     for i, name in enumerate(feature_names):
-        impact = scaled_vector[i] * coefs[i]
+        impact = final_vector[i] * coefs[i]
         impacts.append((name, impact))
 
     # Sort by absolute impact

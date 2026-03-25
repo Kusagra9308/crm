@@ -36,8 +36,8 @@ export async function GET(
     
     const deal_age = Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24));
     const days_to_close = deal.close_date 
-      ? Math.floor((new Date(deal.close_date).getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-      : 30; // Default to 30 days if no close date set
+      ? Math.floor((new Date(deal.close_date).getTime() - created.getTime()) / (1000 * 60 * 60 * 24))
+      : 30; // Total Duration (Created -> Close)
 
     const payload = {
       amount: parseFloat(deal.amount),

@@ -383,7 +383,9 @@ async function recalculateAiScore(dealId: number) {
 
     // Calculate Real Age and Urgency
     const deal_age = Math.floor((new Date().getTime() - new Date(d.created_at).getTime()) / (1000 * 60 * 60 * 24));
-    const days_to_close = d.close_date ? Math.floor((new Date(d.close_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)) : 30;
+    const days_to_close = d.close_date 
+      ? Math.floor((new Date(d.close_date).getTime() - new Date(d.created_at).getTime()) / (1000 * 60 * 60 * 24)) 
+      : 30; // Total Duration (Created -> Close)
 
     // Dynamic Feature: Memory Density (Task Count)
     const ntRes = await query("SELECT COUNT(*) as count FROM tasks WHERE deal_id = $1", [dealId]);
