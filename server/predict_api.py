@@ -50,6 +50,7 @@ class DealFeatures(BaseModel):
     demo_completed: bool = False
     champion_identified: bool = False
     days_to_close: int = 0
+    company_ai_score: float = 0.5
 
 # Map frontend stage names to model numeric labels
 STAGE_MAP = {
@@ -70,6 +71,7 @@ FEATURE_LABELS = {
     "demo_completed": "Key milestone (Demo)",
     "champion_identified": "Relationship (Champion)",
     "days_to_close": "Timeline proximity",
+    "company_score": "Company history quality",
     "stage_demo": "Stage-to-Demo synergy",
     "stage_notes": "Activity-to-Stage synergy",
     "activity_recency": "Recent engagement speed",
@@ -152,15 +154,15 @@ def predict(deal: DealFeatures):
     # Order must match ml_pipeline features:
     features = np.array([[
         amt_norm,
-        st_norm,
         nc_log,
         age_norm,
         demo_f,
         float(1 if deal.champion_identified else 0),
         dtc_norm,
+        float(deal.company_ai_score),
         sd,
         sn_nc,
-        rec,
+        (nc_log + 0.1) / (age_norm + 1.0),
         stall,
         ls_risk,
         m_gap
@@ -232,15 +234,17 @@ def explain(deal: DealFeatures):
     m_gap   = 1.0 if (stage_num >= 3 and not deal.demo_completed) else 0.0
 
     final_vector = [
-        amt_norm, st_norm, nc_log, age_norm, demo_f, 
+        amt_norm, nc_log, age_norm, demo_f, 
         float(1 if deal.champion_identified else 0), 
-        dtc_norm, sd, sn_nc, rec, stall, ls_risk, m_gap
+        dtc_norm, 
+        float(deal.company_ai_score),
+        sd, sn_nc, (nc_log + 0.1) / (age_norm + 1.0), stall, ls_risk, m_gap
     ]
 
     # 4. Compute Contributions (Score Impact)
     feature_names = [
-        "amount", "stage_numeric", "note_count", "deal_age", "demo_completed",
-        "champion_identified", "days_to_close", "stage_demo", "stage_notes", 
+        "amount", "note_count", "deal_age", "demo_completed",
+        "champion_identified", "days_to_close", "company_score", "stage_demo", "stage_notes", 
         "activity_recency", "stalled", "late_stage_risk", "milestone_gap"
     ]
     

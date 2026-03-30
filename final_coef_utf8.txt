@@ -1,0 +1,5 @@
+﻿Sufficient real data (914 deals). Skipping synthetic generation.
+Calculating Company AI Scores based on historical performance...
+Updated scores for 8 companies.
+[OK] OK: Behavioral signals are driving the model robustness.
+Chart skipped/Simplified: Calibration doesn't export easy coefficients.

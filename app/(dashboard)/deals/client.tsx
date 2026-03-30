@@ -77,12 +77,17 @@ function DraggableDealCard({
       className={`bg-background border border-border rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing group relative ${isDragging ? "opacity-50" : ""}`}
     >
       <div className="font-medium text-sm mb-1">{deal.name}</div>
-      {/* 
-      {deal.ai_score !== null && deal.ai_score !== undefined && (
-        <div className="text-xs text-green-500 font-medium">
-          AI Score: {Number(deal.ai_score).toFixed(1)}%
+      {deal.champion_first_name && (
+        <div className="flex items-center gap-1 text-[11px] text-primary font-bold mb-1 bg-primary/5 p-1 rounded">
+          <Target className="h-3 w-3" />
+          {deal.champion_first_name} {deal.champion_last_name}
         </div>
-      )} */}
+      )}
+      {deal.ai_score !== null && deal.ai_score !== undefined && (
+        <div className="text-[10px] text-muted-foreground italic mb-1">
+          Internal Model Score: {Number(deal.ai_score).toFixed(0)}%
+        </div>
+      )}
 
       {deal.ai_score !== null &&
         deal.ai_score !== undefined &&
@@ -211,9 +216,11 @@ function DroppableColumn({
 export default function DealsClient({
   initialDeals,
   companies,
+  contacts = [],
 }: {
   initialDeals: any[];
   companies: any[];
+  contacts?: any[];
 }) {
   const [deals, setDeals] = useState(initialDeals);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -231,6 +238,7 @@ export default function DealsClient({
   const [isExplaining, setIsExplaining] = useState(false);
   const [isExplainLoading, setIsExplainLoading] = useState(false);
   const [explainError, setExplainError] = useState<string | null>(null);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -565,6 +573,8 @@ export default function DealsClient({
               <select
                 id="company_id"
                 name="company_id"
+                value={selectedCompanyId}
+                onChange={(e) => setSelectedCompanyId(e.target.value)}
                 className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary outline-none"
               >
                 <option value="">Select a company...</option>
@@ -578,12 +588,15 @@ export default function DealsClient({
 
             {/* AI Signal Toggles */}
             <div className="pt-2">
-              <Label className="text-sm font-semibold">AI Validation Signals</Label>
+              <Label className="text-sm font-semibold text-primary/80 flex items-center gap-2">
+                <BrainCircuit className="h-4 w-4" />
+                AI Validation Signals
+              </Label>
               <p className="text-[10px] text-muted-foreground mb-3">
-                Toggle these to improve AI win-probability accuracy.
+                Select a Champion to improve AI win-probability accuracy.
               </p>
               
-              <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-3">
                 <label className="flex items-center gap-3 p-3 border border-border/50 rounded-lg cursor-pointer hover:bg-muted/30 transition-colors">
                   <input 
                     type="checkbox" 
@@ -592,19 +605,42 @@ export default function DealsClient({
                     className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
                   />
                   <input type="hidden" name="demo_completed" value={demoCompleted ? "true" : "false"} />
-                  <span className="text-sm font-medium">Product Demo</span>
+                  <span className="text-sm font-medium">Product Demo Completed</span>
                 </label>
 
-                <label className="flex items-center gap-3 p-3 border border-border/50 rounded-lg cursor-pointer hover:bg-muted/30 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={championIdentified} 
-                    onChange={(e) => setChampionIdentified(e.target.checked)}
-                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                  />
-                  <input type="hidden" name="champion_identified" value={championIdentified ? "true" : "false"} />
-                  <span className="text-sm font-medium">Champion Identified</span>
-                </label>
+                <div className="p-3 border border-border/50 rounded-lg space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={championIdentified} 
+                      onChange={(e) => setChampionIdentified(e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    <input type="hidden" name="champion_identified" value={championIdentified ? "true" : "false"} />
+                    <span className="text-sm font-medium">Champion Identified</span>
+                  </label>
+
+                  {championIdentified && (
+                    <div className="space-y-1 animate-in fade-in slide-in-from-top-1 duration-200">
+                      <Label htmlFor="champion_id" className="text-[10px] uppercase font-bold text-muted-foreground">Select Contact as Champion</Label>
+                      <select
+                        id="champion_id"
+                        name="champion_id"
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-xs focus:ring-2 focus:ring-primary outline-none"
+                        required
+                      >
+                        <option value="">Choose a contact...</option>
+                        {contacts
+                          .filter(c => !selectedCompanyId || c.company_id === parseInt(selectedCompanyId))
+                          .map((contact) => (
+                          <option key={contact.id} value={contact.id}>
+                            {contact.first_name} {contact.last_name} ({contact.email})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -835,19 +871,46 @@ export default function DealsClient({
                         />
                      </label>
 
-                     <label className="flex items-center justify-between p-4 bg-muted/30 border border-border/50 rounded-xl cursor-pointer hover:bg-muted/50 transition-colors">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-semibold">Champion Identified</span>
-                          <span className="text-[10px] text-muted-foreground">Stakeholder buy-in secured</span>
-                        </div>
-                        <input 
-                          name="champion_identified"
-                          type="checkbox" 
-                          defaultChecked={selectedDeal.champion_identified}
-                          className="h-5 w-5 accent-primary cursor-pointer"
-                          value="true"
-                        />
-                     </label>
+                     <div className="space-y-2 p-4 bg-muted/30 border border-border/50 rounded-xl">
+                       <label className="flex items-center justify-between cursor-pointer hover:bg-muted/50 transition-colors">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-semibold">Champion Identified</span>
+                            <span className="text-[10px] text-muted-foreground">Stakeholder buy-in secured</span>
+                          </div>
+                          <input 
+                            name="champion_identified"
+                            type="checkbox" 
+                            defaultChecked={selectedDeal.champion_identified}
+                            className="h-5 w-5 accent-primary cursor-pointer"
+                            onChange={(e) => {
+                              setSelectedDeal({...selectedDeal, champion_identified: e.target.checked});
+                            }}
+                            value="true"
+                          />
+                       </label>
+
+                       {selectedDeal.champion_identified && (
+                          <div className="space-y-1 mt-2 pt-2 border-t border-border/20 animate-in fade-in slide-in-from-top-1 duration-200">
+                            <Label htmlFor="update_champion_id" className="text-[10px] uppercase font-bold text-muted-foreground">Select Champion Contact</Label>
+                            <select
+                              id="update_champion_id"
+                              name="champion_id"
+                              defaultValue={selectedDeal.champion_id || ""}
+                              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-xs focus:ring-2 focus:ring-primary outline-none"
+                              required
+                            >
+                              <option value="">Choose a contact...</option>
+                              {contacts
+                                .filter(c => !selectedDeal.company_id || c.company_id === selectedDeal.company_id)
+                                .map((contact) => (
+                                <option key={contact.id} value={contact.id}>
+                                  {contact.first_name} {contact.last_name} ({contact.email})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                       )}
+                     </div>
                    </div>
                 </div>
 

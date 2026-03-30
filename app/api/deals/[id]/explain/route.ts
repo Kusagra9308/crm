@@ -16,9 +16,11 @@ export async function GET(
     // 1. Fetch deal details from DB
     const res_db = await query(`
       SELECT 
-        amount, stage, created_at, close_date, demo_completed, champion_identified,
+        d.*, 
+        c.ai_score as company_ai_score,
         (SELECT COUNT(*) FROM tasks t WHERE t.deal_id = d.id) AS note_count
       FROM deals d
+      LEFT JOIN companies c ON d.company_id = c.id
       WHERE d.id = $1
     `, [parseInt(id)]);
 
@@ -46,7 +48,8 @@ export async function GET(
       deal_age: deal_age,
       demo_completed: !!deal.demo_completed,
       champion_identified: !!deal.champion_identified,
-      days_to_close: days_to_close
+      days_to_close: days_to_close,
+      company_ai_score: parseFloat(deal.company_ai_score || 0.5)
     };
 
     const res_py = await fetch(`${PYTHON_API_URL}/explain`, {
